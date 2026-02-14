@@ -50,6 +50,8 @@ gpg --verify skillseal-sign/SKILL.sig skillseal-sign/SKILL.md
 
 If GPG reports `Good signature from "Ian McCutcheon (SkillSeal) <ian@esoup.net>"`, the package is authentic and unmodified. You can now trust the tool to verify everything else.
 
+All commits in this repository are GPG-signed with the same key. On GitHub, every commit should display a **Verified** badge. If you see unverified commits, investigate before proceeding.
+
 **Author fingerprint:** `7097CE1EF54E0808FD3855427ED9682FF64286D0`
 
 ## Quick Start
