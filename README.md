@@ -58,6 +58,43 @@ my-skill/
 
 Verification fetches the author's public key from GitHub, validates the signature, checks manifest integrity, and applies trust policy from the local store at `~/.skillseal/trust-store.json`.
 
+## Security: GPG Agent and Passphrase Caching
+
+SkillSeal uses GPG for all signing operations. GPG delegates passphrase handling to `gpg-agent`, which **caches passphrases by default**. This has a direct security implication:
+
+**If your passphrase is cached, an LLM agent can sign skills without prompting you for approval.**
+
+After you enter your GPG passphrase (for any reason — signing, key generation, etc.), `gpg-agent` holds it in memory for a configurable period. Any subsequent signing operation within that window succeeds silently. This means an LLM agent running `skillseal sign` will not be stopped by a passphrase prompt if the cache is warm.
+
+### Default cache behavior
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `default-cache-ttl` | 600 | Seconds the passphrase stays cached after last use (10 min) |
+| `max-cache-ttl` | 7200 | Maximum cache lifetime regardless of use (2 hours) |
+
+### Hardening options
+
+To require a passphrase prompt on every signing operation, add this to `~/.gnupg/gpg-agent.conf`:
+
+```
+ignore-cache-for-signing
+```
+
+Then reload the agent:
+
+```bash
+gpgconf --kill gpg-agent
+```
+
+This forces GPG to prompt for your passphrase every time `skillseal sign` runs, even if the passphrase is otherwise cached. The LLM agent will be unable to sign without your explicit interaction.
+
+### Recommendations
+
+- **Personal use with trusted LLM agents:** Default caching is reasonable. Your passphrase protects the key at rest; the cache window is limited.
+- **Shared machines or untrusted agents:** Enable `ignore-cache-for-signing`. Every signature requires your explicit passphrase entry.
+- **CI/CD or automated signing:** Use a dedicated signing key with no passphrase, stored in a secured environment with restricted access.
+
 ## Specifications
 
 - [Signature Format](spec/signature-format.md)
