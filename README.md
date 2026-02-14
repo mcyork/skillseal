@@ -26,11 +26,36 @@ SkillSeal provides a lightweight signing framework for skill packages:
 | `skillseal-sign/SKILL.md` | Skill that teaches LLMs how to sign |
 | `skillseal-verify/SKILL.md` | Skill that teaches LLMs how to verify |
 
+## Bootstrap Verification
+
+Before trusting SkillSeal, verify it. This uses standard GPG — no SkillSeal CLI required:
+
+```bash
+git clone https://github.com/mcyork/skillseal.git
+cd skillseal
+
+# Import the author's public key from GitHub
+curl -sL https://github.com/mcyork.gpg | gpg --import
+
+# Verify the signing key fingerprint matches
+# Expected: 7097 CE1E F54E 0808 FD38 5542 7ED9 682F F642 86D0
+gpg --fingerprint ian@esoup.net
+
+# Verify the verification skill is authentic
+gpg --verify skillseal-verify/SKILL.sig skillseal-verify/SKILL.md
+
+# Verify the signing skill is authentic
+gpg --verify skillseal-sign/SKILL.sig skillseal-sign/SKILL.md
+```
+
+If GPG reports `Good signature from "Ian McCutcheon (SkillSeal) <ian@esoup.net>"`, the package is authentic and unmodified. You can now trust the tool to verify everything else.
+
+**Author fingerprint:** `7097CE1EF54E0808FD3855427ED9682FF64286D0`
+
 ## Quick Start
 
 ```bash
-# Install
-git clone https://github.com/mcyork/skillseal.git
+# Install (after bootstrap verification above)
 cd skillseal && bun install
 
 # Sign a skill
