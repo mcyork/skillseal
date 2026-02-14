@@ -2,15 +2,23 @@
 // SkillSeal CLI — entry point and command router
 
 import { signCommand } from "./sign";
+import { signAllCommand } from "./sign-all";
 import { verifyCommand } from "./verify";
 import { initCommand } from "./init";
+import { trustCommand } from "./trust";
+import { attestCommand } from "./attest";
+import { clearCache } from "../lib";
 
 const USAGE = `skillseal — Cryptographic signing and verification for LLM agent skills
 
 Usage:
-  skillseal sign <dir>     Sign a skill package
-  skillseal verify <dir>   Verify a skill package
-  skillseal init <dir>     Scaffold a new skill package
+  skillseal sign <dir>      Sign a skill package
+  skillseal sign-all <dir>  Sign all skill packages in a directory
+  skillseal verify <dir>    Verify a skill package
+  skillseal attest <dir>    Create an attestation bundle for a skill
+  skillseal init <dir>      Scaffold a new skill package
+  skillseal trust <cmd>     Manage trust store (add, remove, list, set-policy)
+  skillseal cache-clear     Kill gpg-agent and clear cached passphrases
 
 Options:
   --help    Show this help message
@@ -22,7 +30,7 @@ const VERSION = "0.1.0";
 async function main() {
   const args = process.argv.slice(2);
 
-  if (args.length === 0 || args.includes("--help")) {
+  if (args.length === 0 || args[0] === "--help") {
     console.log(USAGE);
     process.exit(0);
   }
@@ -33,6 +41,41 @@ async function main() {
   }
 
   const command = args[0];
+
+  // Commands that handle their own argument parsing
+  if (command === "trust") {
+    await trustCommand(args.slice(1));
+    return;
+  }
+
+  if (command === "attest") {
+    await attestCommand(args.slice(1));
+    return;
+  }
+
+  if (command === "verify") {
+    const dir = args[1];
+    if (!dir) {
+      console.error("Error: <dir> argument is required for 'verify' command.");
+      process.exit(1);
+    }
+    const { resolve } = await import("node:path");
+    await verifyCommand(resolve(dir), args.slice(2));
+    return;
+  }
+
+  if (command === "cache-clear") {
+    const ok = await clearCache();
+    if (ok) {
+      console.log("GPG agent killed. All cached passphrases cleared.");
+      console.log("Next signing or trust operation will require your passphrase.");
+    } else {
+      console.error("Failed to kill gpg-agent. Is it running?");
+      process.exit(1);
+    }
+    return;
+  }
+
   const dir = args[1];
 
   if (!dir) {
@@ -47,8 +90,8 @@ async function main() {
     case "sign":
       await signCommand(resolvedDir);
       break;
-    case "verify":
-      await verifyCommand(resolvedDir);
+    case "sign-all":
+      await signAllCommand(resolvedDir);
       break;
     case "init":
       await initCommand(resolvedDir);

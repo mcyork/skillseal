@@ -80,6 +80,90 @@ export async function getSigningFingerprint(): Promise<string | null> {
   return null;
 }
 
+/**
+ * Check if gpg-agent has any cached passphrases.
+ * Returns true if at least one key has a cached passphrase (cache is "warm").
+ */
+export async function isCacheWarm(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(
+      ["gpg-connect-agent", "keyinfo --list", "/bye"],
+      { stdout: "pipe", stderr: "pipe" }
+    );
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) return false;
+    const output = await new Response(proc.stdout).text();
+    // Lines starting with "S KEYINFO" — field 7 is "1" if cached
+    for (const line of output.split("\n")) {
+      if (line.startsWith("S KEYINFO")) {
+        const fields = line.split(" ");
+        if (fields[7] === "1") return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Kill gpg-agent, clearing all cached passphrases.
+ */
+export async function clearCache(): Promise<boolean> {
+  const proc = Bun.spawn(
+    ["gpgconf", "--kill", "gpg-agent"],
+    { stdout: "pipe", stderr: "pipe" }
+  );
+  return (await proc.exited) === 0;
+}
+
+/**
+ * Sign an arbitrary file with a detached GPG signature.
+ * Used for both SKILL.md and trust-store.json.
+ */
+export async function signFile(
+  filePath: string,
+  sigPath: string,
+  fingerprint: string
+): Promise<{ success: boolean; error?: string }> {
+  // Remove existing signature if present
+  const existingSig = Bun.file(sigPath);
+  if (await existingSig.exists()) {
+    const { unlink } = await import("node:fs/promises");
+    await unlink(sigPath);
+  }
+
+  const proc = Bun.spawn(
+    ["gpg", "--detach-sign", "--armor", "--local-user", fingerprint, "--output", sigPath, "--", filePath],
+    { stdout: "pipe", stderr: "pipe" }
+  );
+
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    return { success: false, error: `gpg signing failed: ${stderr.trim()}` };
+  }
+  return { success: true };
+}
+
+/**
+ * Verify a detached GPG signature against a file.
+ * Returns true if the signature is valid.
+ */
+export async function verifyFileSignature(
+  filePath: string,
+  sigPath: string
+): Promise<boolean> {
+  const sigFile = Bun.file(sigPath);
+  if (!(await sigFile.exists())) return false;
+
+  const proc = Bun.spawn(
+    ["gpg", "--verify", "--", sigPath, filePath],
+    { stdout: "pipe", stderr: "pipe" }
+  );
+  return (await proc.exited) === 0;
+}
+
 export async function getKeyUid(fingerprint: string): Promise<{ name?: string; email?: string } | null> {
   const proc = Bun.spawn(
     ["gpg", "--list-keys", "--with-colons", fingerprint],

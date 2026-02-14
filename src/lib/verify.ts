@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { verifyManifest, hashManifest } from "./manifest";
+import type { AttestationResult, AttestationBundle } from "./attest";
+import { discoverLocalAttestations, verifyAttestationBundle } from "./attest";
 
 const GITHUB_USERNAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 const MAX_KEY_SIZE = 1024 * 1024; // 1 MB
@@ -42,6 +44,7 @@ export interface VerifyResult {
   author?: TrustJson["author"];
   errors: string[];
   warnings: string[];
+  attestations: AttestationResult[];
 }
 
 interface FrontmatterData {
@@ -112,35 +115,84 @@ export async function fetchGitHubKey(username: string): Promise<string> {
   return keyData;
 }
 
-export async function verifySkill(skillDir: string): Promise<VerifyResult> {
+export interface VerifyOptions {
+  /** Explicit attestation bundles to verify (from --attestation flag or fetched URLs) */
+  explicitAttestations?: AttestationBundle[];
+  /** Whether to scan ATTESTATIONS/ directory (default: true) */
+  checkLocalAttestations?: boolean;
+}
+
+export async function verifySkill(
+  skillDir: string,
+  options: VerifyOptions = {}
+): Promise<VerifyResult> {
   const errors: string[] = [];
   const warnings: string[] = [];
   let signatureValid = false;
   let manifestValid = false;
+  const attestationResults: AttestationResult[] = [];
 
-  // 1. Read TRUST.json
+  // 1. Read TRUST.json (optional for unsigned skills)
   const trustPath = join(skillDir, "TRUST.json");
   const trustFile = Bun.file(trustPath);
-  if (!(await trustFile.exists())) {
-    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json not found"], warnings };
+  const hasTrustJson = await trustFile.exists();
+
+  if (!hasTrustJson) {
+    // Unsigned skill — still check attestations if provided
+    const hasAttestations =
+      (options.explicitAttestations && options.explicitAttestations.length > 0) ||
+      options.checkLocalAttestations !== false;
+
+    if (!hasAttestations) {
+      return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json not found (unsigned skill, no attestations provided)"], warnings, attestations: [] };
+    }
+
+    // For unsigned skills, skip signature/manifest checks and go straight to attestations
+    warnings.push("Unsigned skill — no author signature or manifest. Trust relies on attestations only.");
+
+    const bundlesToVerify: Array<{ bundle: AttestationBundle; source: AttestationResult["source"] }> = [];
+    if (options.checkLocalAttestations !== false) {
+      const localBundles = await discoverLocalAttestations(skillDir);
+      for (const b of localBundles) bundlesToVerify.push({ bundle: b, source: "local" });
+    }
+    if (options.explicitAttestations) {
+      for (const b of options.explicitAttestations) bundlesToVerify.push({ bundle: b, source: "explicit" });
+    }
+
+    if (bundlesToVerify.length > 0) {
+      const results = await Promise.all(
+        bundlesToVerify.map(({ bundle, source }) => verifyAttestationBundle(bundle, skillDir, source))
+      );
+      attestationResults.push(...results);
+    }
+
+    const hasValidAttestation = attestationResults.some((a) => a.valid);
+    return {
+      valid: hasValidAttestation,
+      signatureValid: false,
+      manifestValid: false,
+      errors: hasValidAttestation ? [] : ["No valid attestations found for unsigned skill"],
+      warnings,
+      attestations: attestationResults,
+    };
   }
 
   let trust: TrustJson;
   try {
     trust = await trustFile.json();
   } catch {
-    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json is not valid JSON"], warnings };
+    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json is not valid JSON"], warnings, attestations: [] };
   }
 
   // Validate required TRUST.json fields
   if (!trust.author || typeof trust.author !== "object") {
-    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing author object"], warnings };
+    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing author object"], warnings, attestations: [] };
   }
   if (!trust.author.github || typeof trust.author.github !== "string") {
-    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing valid author.github field"], warnings };
+    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing valid author.github field"], warnings, attestations: [] };
   }
   if (!trust.author.fingerprint || typeof trust.author.fingerprint !== "string") {
-    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing valid author.fingerprint field"], warnings };
+    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing valid author.fingerprint field"], warnings, attestations: [] };
   }
 
   // 2. Check SKILL.md and SKILL.sig exist
@@ -149,11 +201,11 @@ export async function verifySkill(skillDir: string): Promise<VerifyResult> {
 
   if (!(await Bun.file(skillMdPath).exists())) {
     errors.push("SKILL.md not found");
-    return { valid: false, signatureValid, manifestValid, author: trust.author, errors, warnings };
+    return { valid: false, signatureValid, manifestValid, author: trust.author, errors, warnings, attestations: [] };
   }
   if (!(await Bun.file(sigPath).exists())) {
     errors.push("SKILL.sig not found");
-    return { valid: false, signatureValid, manifestValid, author: trust.author, errors, warnings };
+    return { valid: false, signatureValid, manifestValid, author: trust.author, errors, warnings, attestations: [] };
   }
 
   // 3. Fetch key from GitHub and import into temp keyring
@@ -267,6 +319,34 @@ export async function verifySkill(skillDir: string): Promise<VerifyResult> {
     warnings.push("MANIFEST.json not found — manifest integrity not checked");
   }
 
+  // 7. Verify attestations
+  const bundlesToVerify: Array<{ bundle: AttestationBundle; source: AttestationResult["source"] }> = [];
+
+  // Scan local ATTESTATIONS/ directory
+  if (options.checkLocalAttestations !== false) {
+    const localBundles = await discoverLocalAttestations(skillDir);
+    for (const b of localBundles) {
+      bundlesToVerify.push({ bundle: b, source: "local" });
+    }
+  }
+
+  // Add explicit attestations
+  if (options.explicitAttestations) {
+    for (const b of options.explicitAttestations) {
+      bundlesToVerify.push({ bundle: b, source: "explicit" });
+    }
+  }
+
+  // Verify all attestation bundles in parallel
+  if (bundlesToVerify.length > 0) {
+    const results = await Promise.all(
+      bundlesToVerify.map(({ bundle, source }) =>
+        verifyAttestationBundle(bundle, skillDir, source)
+      )
+    );
+    attestationResults.push(...results);
+  }
+
   return {
     valid: signatureValid && manifestValid && errors.length === 0,
     signatureValid,
@@ -274,5 +354,6 @@ export async function verifySkill(skillDir: string): Promise<VerifyResult> {
     author: trust.author,
     errors,
     warnings,
+    attestations: attestationResults,
   };
 }

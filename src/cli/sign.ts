@@ -8,6 +8,8 @@ import {
   signSkill,
   getSigningFingerprint,
   getKeyUid,
+  loadConfig,
+  isCacheWarm,
 } from "../lib";
 import type { TrustJson } from "../lib";
 
@@ -40,30 +42,31 @@ function serializeFrontmatter(yaml: Record<string, string>, body: string): strin
 export async function signCommand(skillDir: string): Promise<void> {
   console.log(`Signing skill package: ${skillDir}`);
 
+  // 0. Load user config for fallback values
+  const config = await loadConfig();
+
   // 1. Check SKILL.md exists
   const skillMdPath = join(skillDir, "SKILL.md");
   const skillMdFile = Bun.file(skillMdPath);
   if (!(await skillMdFile.exists())) {
-    console.error("Error: SKILL.md not found in", skillDir);
-    process.exit(1);
+    throw new Error(`SKILL.md not found in ${skillDir}`);
   }
 
   // 2. Read and parse SKILL.md frontmatter
   let content = await skillMdFile.text();
   const parsed = parseFrontmatter(content);
   if (!parsed) {
-    console.error("Error: SKILL.md has no YAML frontmatter. Add a --- delimited header.");
-    process.exit(1);
+    throw new Error("SKILL.md has no YAML frontmatter. Add a --- delimited header.");
   }
 
   // 3. Get signing key fingerprint
-  // Prefer the author_fingerprint from SKILL.md if it matches a secret key
+  // Priority: SKILL.md frontmatter > config.json > auto-detect
   let fingerprint: string | null = null;
-  const declaredFp = parsed.yaml["author_fingerprint"];
+  const declaredFp = parsed.yaml["author_fingerprint"] || config.fingerprint;
   if (declaredFp) {
     // Verify this key exists in the secret keyring
     const checkProc = Bun.spawn(
-      ["gpg", "--list-secret-keys", "--with-colons", declaredFp],
+      ["gpg", "--list-secret-keys", "--with-colons", "--", declaredFp],
       { stdout: "pipe", stderr: "pipe" }
     );
     const checkExit = await checkProc.exited;
@@ -75,15 +78,14 @@ export async function signCommand(skillDir: string): Promise<void> {
     fingerprint = await getSigningFingerprint();
   }
   if (!fingerprint) {
-    console.error("Error: No GPG secret key found. Generate one with: gpg --gen-key");
-    process.exit(1);
+    throw new Error("No GPG secret key found. Generate one with: gpg --gen-key");
   }
   console.log(`  Using GPG key: ${fingerprint}`);
 
   const uid = await getKeyUid(fingerprint);
 
   // 4. Write TRUST.json first (excluded from manifest, so no convergence issue)
-  const github = parsed.yaml["github"] || "";
+  const github = parsed.yaml["github"] || config.github || "";
   const trustData: TrustJson = {
     schema_version: "0.1.0",
     author: {
@@ -140,8 +142,7 @@ export async function signCommand(skillDir: string): Promise<void> {
   }
 
   if (!converged) {
-    console.error("Error: manifest hash failed to converge after", MAX_CONVERGENCE_ITERATIONS, "iterations");
-    process.exit(1);
+    throw new Error(`Manifest hash failed to converge after ${MAX_CONVERGENCE_ITERATIONS} iterations`);
   }
 
   console.log(`  Manifest hash converged: ${parsed.yaml["manifest_hash"]}`);
@@ -150,8 +151,7 @@ export async function signCommand(skillDir: string): Promise<void> {
   console.log("  Signing SKILL.md...");
   const signResult = await signSkill(skillDir, fingerprint);
   if (!signResult.success) {
-    console.error("Error:", signResult.error);
-    process.exit(1);
+    throw new Error(signResult.error || "GPG signing failed");
   }
   console.log(`  Wrote ${signResult.sigPath}`);
 
@@ -159,4 +159,10 @@ export async function signCommand(skillDir: string): Promise<void> {
   console.log(`  Author: ${trustData.author.name} <${trustData.author.email}>`);
   console.log(`  Fingerprint: ${fingerprint}`);
   console.log(`  GitHub: ${github}`);
+
+  // Warn if GPG cache is warm — signing happened without passphrase prompt
+  if (await isCacheWarm()) {
+    console.log("\n  NOTE: GPG passphrase cache is active. Signing did not require");
+    console.log("  manual passphrase entry. To clear: skillseal cache-clear");
+  }
 }

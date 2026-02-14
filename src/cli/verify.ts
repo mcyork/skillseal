@@ -1,17 +1,164 @@
 // SkillSeal CLI — verify command
-// Reads TRUST.json, fetches GitHub key, verifies signature + manifest integrity
+// Reads TRUST.json, fetches GitHub key, verifies signature + manifest integrity + attestations
 
-import { verifySkill, loadTrustStore, evaluatePolicy } from "../lib";
-import type { TrustJson } from "../lib";
-import { join } from "node:path";
+import {
+  verifySkill,
+  loadTrustStore,
+  evaluatePolicy,
+  isReviewerTrusted,
+  parseAttestationBundle,
+  fetchAttestationFromUrl,
+} from "../lib";
+import type { TrustJson, AttestationBundle } from "../lib";
+import { join, resolve } from "node:path";
 
-export async function verifyCommand(skillDir: string): Promise<void> {
-  console.log(`Verifying skill package: ${skillDir}`);
+export async function verifyCommand(skillDir: string, extraArgs?: string[]): Promise<void> {
+  const args = extraArgs || process.argv.slice(3);
+
+  // Parse flags
+  const attestationPaths: string[] = [];
+  let noAttestations = false;
+  let humanOutput = false;
+
+  for (let i = 0; i < args.length; i++) {
+    switch (args[i]) {
+      case "--attestation":
+        i++;
+        if (!args[i]) {
+          console.error("Error: --attestation requires a path or URL");
+          process.exit(1);
+        }
+        attestationPaths.push(args[i]);
+        break;
+      case "--no-attestations":
+        noAttestations = true;
+        break;
+      case "--human":
+        humanOutput = true;
+        break;
+    }
+  }
+
+  // Load explicit attestation bundles
+  const explicitAttestations: AttestationBundle[] = [];
+  for (const pathOrUrl of attestationPaths) {
+    try {
+      if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+        const bundle = await fetchAttestationFromUrl(pathOrUrl);
+        explicitAttestations.push(bundle);
+      } else {
+        const absPath = resolve(pathOrUrl);
+        const content = await Bun.file(absPath).text();
+        const bundle = parseAttestationBundle(content);
+        explicitAttestations.push(bundle);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (humanOutput) {
+        console.error(`Error loading attestation from ${pathOrUrl}: ${msg}`);
+      } else {
+        console.log(JSON.stringify({ error: `Failed to load attestation from ${pathOrUrl}: ${msg}` }));
+      }
+      process.exit(1);
+    }
+  }
 
   // Run verification
-  const result = await verifySkill(skillDir);
+  const result = await verifySkill(skillDir, {
+    explicitAttestations: explicitAttestations.length > 0 ? explicitAttestations : undefined,
+    checkLocalAttestations: !noAttestations,
+  });
 
-  // Display results
+  // Evaluate trust policy
+  let policy: { scenario: string; action: string } | null = null;
+  const trustStore = await loadTrustStore();
+
+  if (result.author) {
+    // Signed skill — full policy evaluation
+    const trustPath = join(skillDir, "TRUST.json");
+    const trustFile = Bun.file(trustPath);
+    if (await trustFile.exists()) {
+      const trust: TrustJson = await trustFile.json();
+      policy = evaluatePolicy(
+        trustStore,
+        trust,
+        result.signatureValid,
+        result.attestations.length > 0 ? result.attestations : undefined
+      );
+    }
+  } else if (result.attestations.length > 0) {
+    // Unsigned skill with attestations — evaluate attestation trust directly.
+    // Principle: if you trust the attester, the code runs regardless of author signing.
+    const validAtts = result.attestations.filter((a) => a.signatureValid);
+
+    const hasTrustedCurrent = validAtts.some(
+      (a) =>
+        !a.stale &&
+        isReviewerTrusted(
+          trustStore,
+          a.bundle.statement.reviewer.github,
+          a.bundle.statement.reviewer.fingerprint
+        )
+    );
+
+    if (hasTrustedCurrent) {
+      policy = {
+        scenario: "trusted_reviewer_attested",
+        action: trustStore.policies.trusted_reviewer_attested,
+      };
+    } else {
+      const hasTrustedStale = validAtts.some(
+        (a) =>
+          a.stale &&
+          isReviewerTrusted(
+            trustStore,
+            a.bundle.statement.reviewer.github,
+            a.bundle.statement.reviewer.fingerprint
+          )
+      );
+
+      if (hasTrustedStale) {
+        policy = {
+          scenario: "known_author_stale_attestations",
+          action: trustStore.policies.known_author_stale_attestations,
+        };
+      } else {
+        policy = {
+          scenario: "unsigned",
+          action: trustStore.policies.unsigned,
+        };
+      }
+    }
+  }
+
+  // JSON output (default)
+  if (!humanOutput) {
+    const output = {
+      valid: result.valid,
+      signatureValid: result.signatureValid,
+      manifestValid: result.manifestValid,
+      author: result.author || null,
+      attestations: result.attestations.map((att) => ({
+        reviewer: att.bundle.statement.reviewer,
+        scope: att.bundle.statement.attestation.scope,
+        version: att.bundle.statement.subject.version,
+        signatureValid: att.signatureValid,
+        digestMatch: att.digestMatch,
+        stale: att.stale,
+        source: att.source,
+        errors: att.errors,
+      })),
+      policy: policy || null,
+      errors: result.errors,
+      warnings: result.warnings,
+    };
+    console.log(JSON.stringify(output, null, 2));
+    if (!result.valid) process.exit(1);
+    return;
+  }
+
+  // Human output (--human flag)
+  console.log(`Verifying skill package: ${skillDir}`);
   console.log("");
   console.log(`  Signature: ${result.signatureValid ? "VALID" : "INVALID"}`);
   console.log(`  Manifest:  ${result.manifestValid ? "VALID" : "INVALID"}`);
@@ -19,6 +166,34 @@ export async function verifyCommand(skillDir: string): Promise<void> {
   if (result.author) {
     console.log(`  Author:    ${result.author.name} (${result.author.github})`);
     console.log(`  Key:       ${result.author.fingerprint}`);
+  }
+
+  // Display attestation results
+  if (result.attestations.length > 0) {
+    console.log("\n  Attestations:");
+    for (const att of result.attestations) {
+      const reviewer = att.bundle.statement.reviewer;
+      const scope = att.bundle.statement.attestation.scope;
+      const version = att.bundle.statement.subject.version;
+      const sigStatus = att.signatureValid ? "VALID" : "INVALID";
+      const freshness = att.stale ? "STALE" : "CURRENT";
+
+      if (att.signatureValid) {
+        console.log(
+          `    ${reviewer.github} (${reviewer.name}): ${sigStatus} [${scope}] (v${version} — ${freshness})`
+        );
+      } else {
+        console.log(
+          `    ${reviewer.github} (${reviewer.name}): SIG ${sigStatus}`
+        );
+      }
+
+      if (att.errors.length > 0) {
+        for (const e of att.errors) {
+          console.log(`      Error: ${e}`);
+        }
+      }
+    }
   }
 
   if (result.warnings.length > 0) {
@@ -35,16 +210,8 @@ export async function verifyCommand(skillDir: string): Promise<void> {
     }
   }
 
-  // Evaluate trust policy
-  if (result.author) {
-    const trustStore = await loadTrustStore();
-    const trustPath = join(skillDir, "TRUST.json");
-    const trustFile = Bun.file(trustPath);
-    if (await trustFile.exists()) {
-      const trust: TrustJson = await trustFile.json();
-      const policy = evaluatePolicy(trustStore, trust, result.signatureValid);
-      console.log(`\n  Trust policy: ${policy.scenario} -> ${policy.action}`);
-    }
+  if (policy) {
+    console.log(`\n  Trust policy: ${policy.scenario} -> ${policy.action}`);
   }
 
   // Overall result
