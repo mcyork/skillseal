@@ -1,0 +1,19 @@
+{
+  "name": "skillseal",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Cryptographic signing and verification for LLM agent skills",
+  "license": "BUSL-1.1",
+  "bin": {
+    "skillseal": "src/cli/index.ts"
+  },
+  "scripts": {
+    "build": "bun build src/cli/index.ts --outdir dist --target bun",
+    "dev": "bun run src/cli/index.ts",
+    "skillseal": "bun run src/cli/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7"
+  }
+}

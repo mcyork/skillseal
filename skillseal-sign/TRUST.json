@@ -1,0 +1,11 @@
+{
+  "schema_version": "0.1.0",
+  "author": {
+    "name": "Ian McCutcheon (SkillSeal)",
+    "email": "ian@esoup.net",
+    "github": "mcyork",
+    "fingerprint": "7097CE1EF54E0808FD3855427ED9682FF64286D0",
+    "key_url": "https://github.com/mcyork.gpg"
+  },
+  "attestations": []
+}

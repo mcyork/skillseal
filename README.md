@@ -1,0 +1,68 @@
+# SkillSeal
+
+Cryptographic signing and verification for LLM agent skills.
+
+## Problem
+
+LLM agents install and execute skills — Markdown files that function as installers with full system privileges. There is no standard mechanism to verify who authored a skill or whether it has been tampered with after publication.
+
+## What SkillSeal Does
+
+SkillSeal provides a lightweight signing framework for skill packages:
+
+- **Provenance** — GPG signatures tie a skill to a verified author identity
+- **Integrity** — A manifest of SHA-256 hashes ensures no file has been altered
+- **Trust policy** — A local trust store lets agents and users define who they trust and at what level
+- **Multi-attestation** — Reviewers and automated scanners can add their own signatures, building a web of trust
+- **Key discovery** — Author public keys are resolved via GitHub (`github.com/{username}.gpg`), requiring no custom infrastructure
+
+## Components
+
+| Component | Purpose |
+|-----------|---------|
+| `skillseal sign <dir>` | Sign a skill package |
+| `skillseal verify <dir>` | Verify a skill package |
+| `skillseal init <dir>` | Scaffold a new skill package |
+| `skillseal-sign/SKILL.md` | Skill that teaches LLMs how to sign |
+| `skillseal-verify/SKILL.md` | Skill that teaches LLMs how to verify |
+
+## Quick Start
+
+```bash
+# Install
+git clone https://github.com/mcyork/skillseal.git
+cd skillseal && bun install
+
+# Sign a skill
+bun run skillseal sign /path/to/skill-directory
+
+# Verify a skill
+bun run skillseal verify /path/to/skill-directory
+
+# Scaffold a new skill package
+bun run skillseal init /path/to/new-skill
+```
+
+## How It Works
+
+A signed skill package contains:
+
+```
+my-skill/
+├── SKILL.md          # The skill instructions (signed artifact)
+├── SKILL.sig         # Detached GPG signature
+├── MANIFEST.json     # SHA-256 hashes of all package files
+├── TRUST.json        # Author identity and attestation records
+└── ATTESTATIONS/     # Reviewer and scanner signatures
+```
+
+Verification fetches the author's public key from GitHub, validates the signature, checks manifest integrity, and applies trust policy from the local store at `~/.skillseal/trust-store.json`.
+
+## Specifications
+
+- [Signature Format](spec/signature-format.md)
+- [Trust Store Format](spec/trust-store-format.md)
+
+## License
+
+Business Source License 1.1 — see [LICENSE.md](LICENSE.md)
