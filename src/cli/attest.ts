@@ -1,5 +1,5 @@
 // SkillSeal CLI — attest command
-// Creates an attestation bundle for a skill package
+// Creates an attestation bundle for a skill or plugin
 
 import { join, resolve } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
   packageAttestationBundle,
   canonicalJsonStringify,
   getKeyUid,
+  isPlugin,
 } from "../lib";
 import type { AttestationScope } from "../lib";
 
@@ -112,8 +113,11 @@ export async function attestCommand(args: string[]): Promise<void> {
     fingerprint: config.fingerprint,
   };
 
+  const isPluginDir = await isPlugin(dir);
+  const packageLabel = isPluginDir ? "plugin" : "skill package";
+
   if (humanOutput) {
-    console.log(`Attesting skill package: ${dir}`);
+    console.log(`Attesting ${packageLabel}: ${dir}`);
     console.log(`  Reviewer: ${reviewer.name} (${reviewer.github})`);
     console.log(`  Scope:    ${scope}`);
   }
@@ -122,13 +126,15 @@ export async function attestCommand(args: string[]): Promise<void> {
   const statement = await createAttestationStatement(dir, reviewer, scope, statementText);
 
   if (humanOutput) {
-    console.log(`  Skill:    ${statement.subject.skill} v${statement.subject.version}`);
+    const nameLabel = isPluginDir ? "Plugin" : "Skill";
+    const artifactLabel = isPluginDir ? "plugin.json" : "SKILL.md";
+    console.log(`  ${nameLabel}:   ${statement.subject.skill} v${statement.subject.version}`);
     console.log(`  Digests:`);
-    console.log(`    SKILL.md:      ${statement.subject.digests.skill_md_sha256.slice(0, 12)}...`);
+    console.log(`    ${artifactLabel}:${" ".repeat(Math.max(1, 14 - artifactLabel.length))}${statement.subject.digests.skill_md_sha256.slice(0, 12)}...`);
     if (statement.subject.digests.manifest_sha256) {
       console.log(`    MANIFEST.json: ${statement.subject.digests.manifest_sha256.slice(0, 12)}...`);
     } else {
-      console.log(`    MANIFEST.json: (unsigned skill — not available)`);
+      console.log(`    MANIFEST.json: (unsigned ${packageLabel} — not available)`);
     }
     console.log(`  Signed:   ${statement.subject.signed ? "yes" : "no"}`);
     if (statement.subject.commit) {

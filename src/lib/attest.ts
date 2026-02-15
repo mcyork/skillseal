@@ -6,6 +6,7 @@ import { readdir } from "node:fs/promises";
 import { mkdtemp, chmod, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { timingSafeEqual } from "node:crypto";
+import { isPlugin } from "./manifest";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -182,37 +183,55 @@ export async function createAttestationStatement(
   scope: AttestationScope,
   statementText: string
 ): Promise<AttestationStatement> {
-  const skillMdPath = join(skillDir, "SKILL.md");
   const manifestPath = join(skillDir, "MANIFEST.json");
+  const plugin = await isPlugin(skillDir);
 
-  // Verify SKILL.md exists
-  if (!(await Bun.file(skillMdPath).exists())) {
-    throw new Error("SKILL.md not found in skill directory");
+  let subjectSha256: string;
+  let skillName: string;
+  let version: string;
+  let isSigned: boolean;
+
+  if (plugin) {
+    // Plugin: digest the signed artifact (plugin.json)
+    const pluginJsonPath = join(skillDir, ".claude-plugin", "plugin.json");
+    if (!(await Bun.file(pluginJsonPath).exists())) {
+      throw new Error(".claude-plugin/plugin.json not found in plugin directory");
+    }
+    subjectSha256 = await sha256Hex(pluginJsonPath);
+
+    const pluginData = await Bun.file(pluginJsonPath).json() as Record<string, unknown>;
+    skillName = pluginData.name ? String(pluginData.name) : join(skillDir).split("/").pop() || "unknown";
+    version = pluginData.version ? String(pluginData.version) : "0.0.0";
+    isSigned = pluginData.signed === true;
+  } else {
+    // Skill: digest SKILL.md
+    const skillMdPath = join(skillDir, "SKILL.md");
+    if (!(await Bun.file(skillMdPath).exists())) {
+      throw new Error("SKILL.md not found in skill directory");
+    }
+    subjectSha256 = await sha256Hex(skillMdPath);
+
+    const skillContent = await Bun.file(skillMdPath).text();
+    const fm = parseFrontmatter(skillContent);
+    skillName = fm?.name ? String(fm.name) : join(skillDir).split("/").pop() || "unknown";
+    version = fm?.version ? String(fm.version) : "0.0.0";
+    isSigned = fm?.signed === true || String(fm?.signed) === "true";
   }
 
-  // Compute digests — MANIFEST.json is optional (unsigned skills)
-  const skillMdSha256 = await sha256Hex(skillMdPath);
+  // Compute manifest digest — MANIFEST.json is optional (unsigned skills)
   const hasManifest = await Bun.file(manifestPath).exists();
   const manifestSha256 = hasManifest ? await sha256Hex(manifestPath) : null;
-
-  // Parse SKILL.md frontmatter for name and version
-  const skillContent = await Bun.file(skillMdPath).text();
-  const fm = parseFrontmatter(skillContent);
-
-  const isSigned = fm?.signed === true || String(fm?.signed) === "true";
-  const skillName = fm?.name ? String(fm.name) : join(skillDir).split("/").pop() || "unknown";
-  const version = fm?.version ? String(fm.version) : "0.0.0";
 
   // Get git metadata
   const commit = await getGitCommit(skillDir);
   const repository = await getGitRemoteUrl(skillDir);
 
-  // Require git commit for unsigned skills — it's the provenance anchor
+  // Require git commit for unsigned skills/plugins — it's the provenance anchor
   if (!isSigned && !commit) {
     throw new Error(
-      "Unsigned skill has no git commit. " +
-      "For unsigned skills, the git commit is the provenance anchor. " +
-      "Commit the skill to a git repo before attesting."
+      `Unsigned ${plugin ? "plugin" : "skill"} has no git commit. ` +
+      "The git commit is the provenance anchor. " +
+      "Commit to a git repo before attesting."
     );
   }
 
@@ -221,7 +240,7 @@ export async function createAttestationStatement(
     version,
     signed: isSigned,
     digests: {
-      skill_md_sha256: skillMdSha256,
+      skill_md_sha256: subjectSha256,
       manifest_sha256: manifestSha256,
     },
   };
@@ -378,19 +397,24 @@ export async function verifyAttestationBundle(
   let digestMatch = false;
   let stale = false;
 
-  const skillMdPath = join(skillDir, "SKILL.md");
+  const plugin = await isPlugin(skillDir);
   const manifestPath = join(skillDir, "MANIFEST.json");
 
-  // 1. Check SKILL.md digest
-  if (await Bun.file(skillMdPath).exists()) {
-    const currentSkillHash = await sha256Hex(skillMdPath);
-    if (safeCompare(currentSkillHash, bundle.statement.subject.digests.skill_md_sha256)) {
+  // 1. Check subject digest (SKILL.md for skills, plugin.json for plugins)
+  const subjectPath = plugin
+    ? join(skillDir, ".claude-plugin", "plugin.json")
+    : join(skillDir, "SKILL.md");
+  const subjectLabel = plugin ? "plugin.json" : "SKILL.md";
+
+  if (await Bun.file(subjectPath).exists()) {
+    const currentHash = await sha256Hex(subjectPath);
+    if (safeCompare(currentHash, bundle.statement.subject.digests.skill_md_sha256)) {
       digestMatch = true;
     } else {
       stale = true;
     }
   } else {
-    errors.push("SKILL.md not found — cannot verify digests");
+    errors.push(`${subjectLabel} not found — cannot verify digests`);
   }
 
   // 2. Check MANIFEST.json digest (only if attestation includes one — signed skills)
