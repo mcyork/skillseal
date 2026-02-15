@@ -9,16 +9,20 @@ import { trustCommand } from "./trust";
 import { attestCommand } from "./attest";
 import { clearCache } from "../lib";
 
-const USAGE = `skillseal — Cryptographic signing and verification for LLM agent skills
+const USAGE = `skillseal — Cryptographic signing and verification for LLM agent skills and plugins
 
 Usage:
-  skillseal sign <dir>      Sign a skill package
-  skillseal sign-all <dir>  Sign all skill packages in a directory
-  skillseal verify <dir>    Verify a skill package
+  skillseal sign <dir>      Sign a skill or plugin (auto-detected)
+  skillseal sign-all <dir>  Sign all skills and plugins in a directory
+  skillseal verify <dir>    Verify a skill or plugin (auto-detected)
   skillseal attest <dir>    Create an attestation bundle for a skill
   skillseal init <dir>      Scaffold a new skill package
   skillseal trust <cmd>     Manage trust store (add, remove, list, set-policy)
   skillseal cache-clear     Kill gpg-agent and clear cached passphrases
+
+Plugin detection:
+  If <dir> contains .claude-plugin/plugin.json, it is treated as a plugin.
+  Otherwise, it is treated as a skill package (requires SKILL.md).
 
 Options:
   --help    Show this help message

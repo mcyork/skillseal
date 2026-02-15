@@ -55,16 +55,61 @@ interface PreToolUsePayload {
   tool_input: Record<string, any>;
 }
 
+// Plugin marketplace base directory
+const PLUGINS_BASE = join(homedir(), '.claude', 'plugins', 'marketplaces');
+
 // ── Verification ───────────────────────────────────────────────────
 
-async function verifySkill(skillName: string): Promise<{ valid: boolean; error?: string }> {
-  // Resolve skill directory — handle both "SkillName" and "namespace:SkillName"
-  const cleanName = skillName.includes(':') ? skillName.split(':').pop()! : skillName;
-  const skillDir = join(SKILLS_DIR, cleanName);
+/**
+ * Resolve a plugin directory by scanning marketplace directories.
+ * Plugins are installed at: ~/.claude/plugins/marketplaces/{marketplace}/plugins/{pluginName}/
+ */
+function resolvePluginDir(pluginName: string): string | null {
+  try {
+    const { readdirSync } = require('fs');
+    if (!existsSync(PLUGINS_BASE)) return null;
 
-  // Check skill directory exists
-  if (!existsSync(join(skillDir, 'SKILL.md'))) {
-    return { valid: false, error: `SKILL.md not found at ${skillDir}` };
+    const marketplaces = readdirSync(PLUGINS_BASE, { withFileTypes: true });
+    for (const mp of marketplaces) {
+      if (!mp.isDirectory()) continue;
+      const pluginPath = join(PLUGINS_BASE, mp.name, 'plugins', pluginName);
+      if (existsSync(join(pluginPath, '.claude-plugin', 'plugin.json'))) {
+        return pluginPath;
+      }
+    }
+  } catch {
+    // Fail closed — return null
+  }
+  return null;
+}
+
+async function verifySkill(skillName: string): Promise<{ valid: boolean; error?: string }> {
+  let verifyDir: string;
+
+  if (skillName.includes(':')) {
+    // Namespaced skill: "pluginName:skillName"
+    // First try resolving as a plugin in the marketplace directories
+    const [pluginName] = skillName.split(':');
+    const pluginDir = resolvePluginDir(pluginName);
+
+    if (pluginDir) {
+      // Found a plugin — verify the whole plugin (not individual skill)
+      verifyDir = pluginDir;
+    } else {
+      // Fall back to skills directory with the skill name part
+      const cleanName = skillName.split(':').pop()!;
+      verifyDir = join(SKILLS_DIR, cleanName);
+    }
+  } else {
+    verifyDir = join(SKILLS_DIR, skillName);
+  }
+
+  // Check that the directory has either a SKILL.md or a plugin.json
+  const hasSkillMd = existsSync(join(verifyDir, 'SKILL.md'));
+  const hasPluginJson = existsSync(join(verifyDir, '.claude-plugin', 'plugin.json'));
+
+  if (!hasSkillMd && !hasPluginJson) {
+    return { valid: false, error: `No SKILL.md or .claude-plugin/plugin.json found at ${verifyDir}` };
   }
 
   // Check if skillseal CLI is available
@@ -73,8 +118,9 @@ async function verifySkill(skillName: string): Promise<{ valid: boolean; error?:
   }
 
   // Run skillseal verify with full trust evaluation (including attestations)
+  // The CLI auto-detects plugin vs skill
   const proc = Bun.spawnSync(
-    ['bun', 'run', SKILLSEAL_CLI, 'verify', skillDir],
+    ['bun', 'run', SKILLSEAL_CLI, 'verify', verifyDir],
     {
       timeout: 30_000,
       env: { ...process.env },

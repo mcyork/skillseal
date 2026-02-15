@@ -1,14 +1,14 @@
 # SkillSeal
 
-Cryptographic signing and verification for LLM agent skills.
+Cryptographic signing and verification for LLM agent skills and plugins.
 
 ## Problem
 
-LLM agents install and execute skills — Markdown files that function as installers with full system privileges. There is no standard mechanism to verify who authored a skill or whether it has been tampered with after publication.
+LLM agents install and execute skills and plugins — Markdown files, commands, hooks, and agents that function as installers with full system privileges. There is no standard mechanism to verify who authored them or whether they have been tampered with after publication.
 
 ## What SkillSeal Does
 
-SkillSeal provides a lightweight signing framework for skill packages:
+SkillSeal provides a lightweight signing framework for skill packages and plugins:
 
 - **Provenance** — GPG signatures tie a skill to a verified author identity
 - **Integrity** — A manifest of SHA-256 hashes ensures no file has been altered
@@ -20,8 +20,9 @@ SkillSeal provides a lightweight signing framework for skill packages:
 
 | Component | Purpose |
 |-----------|---------|
-| `skillseal sign <dir>` | Sign a skill package |
-| `skillseal verify <dir>` | Verify a skill package |
+| `skillseal sign <dir>` | Sign a skill or plugin (auto-detected) |
+| `skillseal verify <dir>` | Verify a skill or plugin (auto-detected) |
+| `skillseal sign-all <dir>` | Sign all skills and plugins in a directory |
 | `skillseal attest <dir>` | Create an attestation bundle for a skill |
 | `skillseal init <dir>` | Scaffold a new skill package |
 | `skillseal trust <cmd>` | Manage trust store (add, remove, list) |
@@ -66,14 +67,19 @@ cd skillseal && bun install
 # Sign a skill
 bun run skillseal sign /path/to/skill-directory
 
-# Verify a skill
-bun run skillseal verify /path/to/skill-directory
+# Sign a plugin (auto-detected via .claude-plugin/plugin.json)
+bun run skillseal sign /path/to/plugin-directory
+
+# Verify a skill or plugin
+bun run skillseal verify /path/to/skill-or-plugin-directory
 
 # Scaffold a new skill package
 bun run skillseal init /path/to/new-skill
 ```
 
 ## How It Works
+
+### Skills
 
 A signed skill package contains:
 
@@ -85,6 +91,27 @@ my-skill/
 ├── TRUST.json        # Author identity and attestation records
 └── ATTESTATIONS/     # Reviewer and scanner signatures
 ```
+
+### Plugins
+
+A signed plugin contains:
+
+```
+my-plugin/
+├── .claude-plugin/
+│   └── plugin.json   # Plugin metadata (signed artifact)
+├── skills/           # Skill packages
+├── commands/         # Slash commands
+├── agents/           # Agent definitions (optional)
+├── hooks/            # Hook scripts (optional)
+├── .mcp.json         # MCP server config (optional)
+├── PLUGIN.sig        # Detached GPG signature of plugin.json
+├── MANIFEST.json     # SHA-256 hashes of all plugin files
+├── TRUST.json        # Author identity and attestation records
+└── README.md
+```
+
+Plugins are the distribution unit — one signature covers all skills, commands, hooks, agents, and MCP configs within the plugin. The `sign` and `verify` commands auto-detect whether a directory is a plugin (has `.claude-plugin/plugin.json`) or a skill (has `SKILL.md`).
 
 Verification fetches the author's public key from GitHub, validates the signature, checks manifest integrity, and applies trust policy from the local store at `~/.skillseal/trust-store.json`.
 

@@ -5,7 +5,7 @@ import { timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { verifyManifest, hashManifest } from "./manifest";
+import { verifyManifest, hashManifest, isPlugin } from "./manifest";
 import type { AttestationResult, AttestationBundle } from "./attest";
 import { discoverLocalAttestations, verifyAttestationBundle } from "./attest";
 
@@ -355,5 +355,207 @@ export async function verifySkill(
     errors,
     warnings,
     attestations: attestationResults,
+  };
+}
+
+// ── Plugin verification ────────────────────────────────────────────
+
+export interface PluginVerifyResult extends VerifyResult {
+  pluginName?: string;
+  pluginVersion?: string;
+}
+
+export async function verifyPlugin(
+  pluginDir: string,
+  options: VerifyOptions = {}
+): Promise<PluginVerifyResult> {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  let signatureValid = false;
+  let manifestValid = false;
+  const attestationResults: AttestationResult[] = [];
+
+  // 1. Read plugin.json
+  const pluginJsonPath = join(pluginDir, ".claude-plugin", "plugin.json");
+  const pluginJsonFile = Bun.file(pluginJsonPath);
+  if (!(await pluginJsonFile.exists())) {
+    return {
+      valid: false, signatureValid: false, manifestValid: false,
+      errors: [".claude-plugin/plugin.json not found"], warnings, attestations: [],
+    };
+  }
+
+  let pluginData: { name?: string; version?: string; signed?: boolean; author_fingerprint?: string; manifest_hash?: string; [key: string]: unknown };
+  try {
+    pluginData = await pluginJsonFile.json();
+  } catch {
+    return {
+      valid: false, signatureValid: false, manifestValid: false,
+      errors: [".claude-plugin/plugin.json is not valid JSON"], warnings, attestations: [],
+    };
+  }
+
+  const pluginName = pluginData.name || "unknown";
+  const pluginVersion = pluginData.version || "unknown";
+
+  // 2. Read TRUST.json
+  const trustPath = join(pluginDir, "TRUST.json");
+  const trustFile = Bun.file(trustPath);
+  if (!(await trustFile.exists())) {
+    return {
+      valid: false, signatureValid: false, manifestValid: false,
+      errors: ["TRUST.json not found (unsigned plugin)"], warnings, attestations: [],
+      pluginName, pluginVersion,
+    };
+  }
+
+  let trust: TrustJson;
+  try {
+    trust = await trustFile.json();
+  } catch {
+    return {
+      valid: false, signatureValid: false, manifestValid: false,
+      errors: ["TRUST.json is not valid JSON"], warnings, attestations: [],
+      pluginName, pluginVersion,
+    };
+  }
+
+  if (!trust.author?.github || !trust.author?.fingerprint) {
+    return {
+      valid: false, signatureValid: false, manifestValid: false,
+      errors: ["TRUST.json missing valid author.github or author.fingerprint"], warnings, attestations: [],
+      pluginName, pluginVersion,
+    };
+  }
+
+  // 3. Check PLUGIN.sig exists
+  const sigPath = join(pluginDir, "PLUGIN.sig");
+  if (!(await Bun.file(sigPath).exists())) {
+    errors.push("PLUGIN.sig not found");
+    return {
+      valid: false, signatureValid, manifestValid, author: trust.author, errors, warnings, attestations: [],
+      pluginName, pluginVersion,
+    };
+  }
+
+  // 4. Fetch key from GitHub and verify signature
+  let tmpGpgHome: string | null = null;
+  try {
+    const keyData = await fetchGitHubKey(trust.author.github);
+
+    tmpGpgHome = await mkdtemp(join(tmpdir(), "skillseal-"));
+    await chmod(tmpGpgHome, 0o700);
+
+    const importProc = Bun.spawn(
+      ["gpg", "--homedir", tmpGpgHome, "--batch", "--import"],
+      { stdin: new TextEncoder().encode(keyData), stdout: "pipe", stderr: "pipe" }
+    );
+    await importProc.exited;
+
+    // Verify key fingerprint matches
+    const listProc = Bun.spawn(
+      ["gpg", "--homedir", tmpGpgHome, "--list-keys", "--with-colons"],
+      { stdout: "pipe", stderr: "pipe" }
+    );
+    await listProc.exited;
+
+    const listOutput = await new Response(listProc.stdout).text();
+    const fingerprints = listOutput
+      .split("\n")
+      .filter((l) => l.startsWith("fpr:"))
+      .map((l) => l.split(":")[9]);
+
+    const expectedFp = trust.author.fingerprint.toUpperCase().replace(/\s/g, "");
+    const foundKey = fingerprints.some((fp) => {
+      if (!fp) return false;
+      return safeCompare(fp.toUpperCase(), expectedFp);
+    });
+
+    if (!foundKey) {
+      errors.push(
+        `Key fingerprint mismatch: expected ${expectedFp} but not found in keys from github.com/${trust.author.github}.gpg`
+      );
+    } else {
+      // Verify PLUGIN.sig against plugin.json
+      const verifyProc = Bun.spawn(
+        ["gpg", "--homedir", tmpGpgHome, "--batch", "--verify", "--", sigPath, pluginJsonPath],
+        { stdout: "pipe", stderr: "pipe" }
+      );
+
+      const verifyExit = await verifyProc.exited;
+      const verifyStderr = await new Response(verifyProc.stderr).text();
+
+      if (verifyExit === 0) {
+        if (verifyStderr.toUpperCase().includes(expectedFp)) {
+          signatureValid = true;
+        } else {
+          signatureValid = true;
+          warnings.push("Signature valid but fingerprint not directly confirmed in GPG output (may be a subkey)");
+        }
+      } else {
+        errors.push(`Signature verification failed: ${verifyStderr.trim()}`);
+      }
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    errors.push(`Key fetch/import error: ${message}`);
+  } finally {
+    if (tmpGpgHome) {
+      await rm(tmpGpgHome, { recursive: true, force: true });
+    }
+  }
+
+  // 5. Verify manifest integrity (plugin mode)
+  const manifestPath = join(pluginDir, "MANIFEST.json");
+  if (await Bun.file(manifestPath).exists()) {
+    const manifestResult = await verifyManifest(pluginDir, true);
+    if (!manifestResult.valid) {
+      for (const err of manifestResult.errors) {
+        errors.push(`Manifest: ${err}`);
+      }
+    } else {
+      manifestValid = true;
+    }
+
+    // Check manifest_hash in plugin.json
+    if (pluginData.manifest_hash) {
+      const currentHash = await hashManifest(pluginDir);
+      if (!safeCompare(String(pluginData.manifest_hash), currentHash)) {
+        errors.push("plugin.json manifest_hash does not match actual MANIFEST.json hash");
+        manifestValid = false;
+      }
+    } else {
+      warnings.push("plugin.json does not contain manifest_hash");
+    }
+  } else {
+    warnings.push("MANIFEST.json not found — manifest integrity not checked");
+  }
+
+  // 6. Verify attestations
+  const bundlesToVerify: Array<{ bundle: AttestationBundle; source: AttestationResult["source"] }> = [];
+  if (options.checkLocalAttestations !== false) {
+    const localBundles = await discoverLocalAttestations(pluginDir);
+    for (const b of localBundles) bundlesToVerify.push({ bundle: b, source: "local" });
+  }
+  if (options.explicitAttestations) {
+    for (const b of options.explicitAttestations) bundlesToVerify.push({ bundle: b, source: "explicit" });
+  }
+  if (bundlesToVerify.length > 0) {
+    const results = await Promise.all(
+      bundlesToVerify.map(({ bundle, source }) => verifyAttestationBundle(bundle, pluginDir, source))
+    );
+    attestationResults.push(...results);
+  }
+
+  return {
+    valid: signatureValid && manifestValid && errors.length === 0,
+    signatureValid,
+    manifestValid,
+    author: trust.author,
+    errors,
+    warnings,
+    attestations: attestationResults,
+    pluginName,
+    pluginVersion,
   };
 }

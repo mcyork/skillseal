@@ -3,13 +3,15 @@
 
 import {
   verifySkill,
+  verifyPlugin,
+  isPlugin,
   loadTrustStore,
   evaluatePolicy,
   isReviewerTrusted,
   parseAttestationBundle,
   fetchAttestationFromUrl,
 } from "../lib";
-import type { TrustJson, AttestationBundle } from "../lib";
+import type { TrustJson, AttestationBundle, PluginVerifyResult } from "../lib";
 import { join, resolve } from "node:path";
 
 export async function verifyCommand(skillDir: string, extraArgs?: string[]): Promise<void> {
@@ -63,18 +65,29 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
     }
   }
 
-  // Run verification
-  const result = await verifySkill(skillDir, {
+  // Auto-detect: plugin or skill
+  const isPluginDir = await isPlugin(skillDir);
+  const verifyOpts = {
     explicitAttestations: explicitAttestations.length > 0 ? explicitAttestations : undefined,
     checkLocalAttestations: !noAttestations,
-  });
+  };
+
+  // Run verification
+  const result = isPluginDir
+    ? await verifyPlugin(skillDir, verifyOpts)
+    : await verifySkill(skillDir, verifyOpts);
+
+  // Extract plugin metadata if available
+  const pluginResult = result as PluginVerifyResult;
+  const pluginName = pluginResult.pluginName;
+  const pluginVersion = pluginResult.pluginVersion;
 
   // Evaluate trust policy
   let policy: { scenario: string; action: string } | null = null;
   const trustStore = await loadTrustStore();
 
   if (result.author) {
-    // Signed skill — full policy evaluation
+    // Signed skill/plugin — full policy evaluation
     const trustPath = join(skillDir, "TRUST.json");
     const trustFile = Bun.file(trustPath);
     if (await trustFile.exists()) {
@@ -87,8 +100,7 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
       );
     }
   } else if (result.attestations.length > 0) {
-    // Unsigned skill with attestations — evaluate attestation trust directly.
-    // Principle: if you trust the attester, the code runs regardless of author signing.
+    // Unsigned skill/plugin with attestations — evaluate attestation trust directly.
     const validAtts = result.attestations.filter((a) => a.signatureValid);
 
     const hasTrustedCurrent = validAtts.some(
@@ -133,7 +145,8 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
 
   // JSON output (default)
   if (!humanOutput) {
-    const output = {
+    const output: Record<string, unknown> = {
+      type: isPluginDir ? "plugin" : "skill",
       valid: result.valid,
       signatureValid: result.signatureValid,
       manifestValid: result.manifestValid,
@@ -152,14 +165,24 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
       errors: result.errors,
       warnings: result.warnings,
     };
+    if (isPluginDir) {
+      output.pluginName = pluginName;
+      output.pluginVersion = pluginVersion;
+    }
     console.log(JSON.stringify(output, null, 2));
     if (!result.valid) process.exit(1);
     return;
   }
 
   // Human output (--human flag)
-  console.log(`Verifying skill package: ${skillDir}`);
-  console.log("");
+  if (isPluginDir) {
+    console.log(`Verifying plugin: ${skillDir}`);
+    console.log("");
+    console.log(`  Type:      Plugin (${pluginName} v${pluginVersion})`);
+  } else {
+    console.log(`Verifying skill package: ${skillDir}`);
+    console.log("");
+  }
   console.log(`  Signature: ${result.signatureValid ? "VALID" : "INVALID"}`);
   console.log(`  Manifest:  ${result.manifestValid ? "VALID" : "INVALID"}`);
 
@@ -217,9 +240,11 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
   // Overall result
   console.log("");
   if (result.valid) {
-    console.log("RESULT: Skill package is VALID and VERIFIED.");
+    const label = isPluginDir ? "Plugin" : "Skill package";
+    console.log(`RESULT: ${label} is VALID and VERIFIED.`);
   } else {
-    console.log("RESULT: Skill package verification FAILED.");
+    const label = isPluginDir ? "Plugin" : "Skill package";
+    console.log(`RESULT: ${label} verification FAILED.`);
     process.exit(1);
   }
 }

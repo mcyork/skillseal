@@ -8,6 +8,20 @@ import { join, relative, posix } from "node:path";
 const EXCLUDED_NAMES = new Set(["SKILL.md", "SKILL.sig", "MANIFEST.json", "TRUST.json"]);
 const EXCLUDED_DIRS = new Set(["ATTESTATIONS", ".git", "node_modules"]);
 
+// Plugin signing excludes the signed artifact and detached signature (same pattern as skills)
+const PLUGIN_EXCLUDED_NAMES = new Set(["MANIFEST.json", "TRUST.json", "PLUGIN.sig"]);
+const PLUGIN_EXCLUDED_DIRS = new Set(["ATTESTATIONS", ".git", "node_modules"]);
+// .claude-plugin/plugin.json is excluded from manifest since it contains manifest_hash (circular)
+const PLUGIN_EXCLUDED_PATHS = new Set([".claude-plugin/plugin.json"]);
+
+/**
+ * Check if a directory is a plugin (has .claude-plugin/plugin.json).
+ */
+export async function isPlugin(dir: string): Promise<boolean> {
+  const pluginJsonPath = join(dir, ".claude-plugin", "plugin.json");
+  return await Bun.file(pluginJsonPath).exists();
+}
+
 function safeCompare(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -28,23 +42,42 @@ async function sha256Hex(filePath: string): Promise<string> {
   return hasher.digest("hex");
 }
 
-async function walkDir(dir: string, root: string): Promise<string[]> {
+interface WalkOptions {
+  excludedNames: Set<string>;
+  excludedDirs: Set<string>;
+  excludedPaths?: Set<string>;
+  /** If true, walk into dot-prefixed directories (e.g. .claude-plugin) */
+  allowDotDirs?: boolean;
+}
+
+async function walkDir(dir: string, root: string, options?: WalkOptions): Promise<string[]> {
+  const opts = options || { excludedNames: EXCLUDED_NAMES, excludedDirs: EXCLUDED_DIRS };
   const entries = await readdir(dir, { withFileTypes: true });
   const paths: string[] = [];
 
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
     const relPath = relative(root, fullPath);
+    const normalizedRel = relPath.split("/").join(posix.sep);
 
-    // Skip hidden files/dirs
-    if (entry.name.startsWith(".")) continue;
+    // Skip hidden files/dirs (unless allowDotDirs for directories)
+    if (entry.name.startsWith(".")) {
+      if (entry.isDirectory() && opts.allowDotDirs) {
+        // Allow walking into this dot-dir, but still check excludedDirs
+        if (opts.excludedDirs.has(entry.name)) continue;
+        const sub = await walkDir(fullPath, root, opts);
+        paths.push(...sub);
+      }
+      continue;
+    }
 
     if (entry.isDirectory()) {
-      if (EXCLUDED_DIRS.has(entry.name)) continue;
-      const sub = await walkDir(fullPath, root);
+      if (opts.excludedDirs.has(entry.name)) continue;
+      const sub = await walkDir(fullPath, root, opts);
       paths.push(...sub);
     } else if (entry.isFile()) {
-      if (EXCLUDED_NAMES.has(entry.name)) continue;
+      if (opts.excludedNames.has(entry.name)) continue;
+      if (opts.excludedPaths?.has(normalizedRel)) continue;
       paths.push(relPath);
     }
   }
@@ -52,8 +85,16 @@ async function walkDir(dir: string, root: string): Promise<string[]> {
   return paths;
 }
 
-export async function generateManifest(skillDir: string, timestamp?: string): Promise<ManifestData> {
-  const filePaths = await walkDir(skillDir, skillDir);
+export async function generateManifest(skillDir: string, timestamp?: string, plugin?: boolean): Promise<ManifestData> {
+  const walkOpts: WalkOptions | undefined = plugin
+    ? {
+        excludedNames: PLUGIN_EXCLUDED_NAMES,
+        excludedDirs: PLUGIN_EXCLUDED_DIRS,
+        excludedPaths: PLUGIN_EXCLUDED_PATHS,
+        allowDotDirs: true,
+      }
+    : undefined;
+  const filePaths = await walkDir(skillDir, skillDir, walkOpts);
   filePaths.sort();
 
   const files: Record<string, string> = {};
@@ -72,8 +113,8 @@ export async function generateManifest(skillDir: string, timestamp?: string): Pr
   };
 }
 
-export async function writeManifest(skillDir: string, timestamp?: string): Promise<ManifestData> {
-  const manifest = await generateManifest(skillDir, timestamp);
+export async function writeManifest(skillDir: string, timestamp?: string, plugin?: boolean): Promise<ManifestData> {
+  const manifest = await generateManifest(skillDir, timestamp, plugin);
   const manifestPath = join(skillDir, "MANIFEST.json");
   await Bun.write(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
   return manifest;
@@ -85,7 +126,8 @@ export async function hashManifest(skillDir: string): Promise<string> {
 }
 
 export async function verifyManifest(
-  skillDir: string
+  skillDir: string,
+  plugin?: boolean
 ): Promise<{ valid: boolean; errors: string[] }> {
   const manifestPath = join(skillDir, "MANIFEST.json");
   const manifestFile = Bun.file(manifestPath);
@@ -111,7 +153,15 @@ export async function verifyManifest(
   }
 
   // Check for unlisted files
-  const currentFiles = await walkDir(skillDir, skillDir);
+  const walkOpts: WalkOptions | undefined = plugin
+    ? {
+        excludedNames: PLUGIN_EXCLUDED_NAMES,
+        excludedDirs: PLUGIN_EXCLUDED_DIRS,
+        excludedPaths: PLUGIN_EXCLUDED_PATHS,
+        allowDotDirs: true,
+      }
+    : undefined;
+  const currentFiles = await walkDir(skillDir, skillDir, walkOpts);
   const listedFiles = new Set(Object.keys(manifest.files));
   for (const filePath of currentFiles) {
     const normalized = filePath.split("/").join(posix.sep);

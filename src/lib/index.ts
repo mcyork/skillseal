@@ -1,13 +1,13 @@
 // SkillSeal shared library — re-exports all modules
 
-export { generateManifest, writeManifest, hashManifest, verifyManifest } from "./manifest";
+export { generateManifest, writeManifest, hashManifest, verifyManifest, isPlugin } from "./manifest";
 export type { ManifestData } from "./manifest";
 
 export { signSkill, getSigningFingerprint, getKeyUid, isCacheWarm, clearCache, signFile, verifyFileSignature } from "./sign";
 export type { SignResult } from "./sign";
 
-export { fetchGitHubKey, verifySkill } from "./verify";
-export type { TrustJson, VerifyResult, VerifyOptions } from "./verify";
+export { fetchGitHubKey, verifySkill, verifyPlugin } from "./verify";
+export type { TrustJson, VerifyResult, VerifyOptions, PluginVerifyResult } from "./verify";
 
 export {
   loadTrustStore,
