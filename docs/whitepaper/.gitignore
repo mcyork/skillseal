@@ -1,0 +1,9 @@
+# Build tooling — only publish markdown, SVGs, and PDF
+Makefile
+templates/
+diagrams/*.d2
+
+# Keep these:
+# diagrams/*.svg  (rendered diagrams for GitHub)
+# output/*.pdf    (downloadable PDF)
+# skillseal-whitepaper.md (source document)
