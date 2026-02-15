@@ -379,4 +379,4 @@ SKILL BLOCKED: "malicious-skill" failed SkillSeal verification
 
 ## License
 
-Business Source License 1.1 — see [LICENSE.md](LICENSE.md)
+Apache License 2.0 — see [LICENSE](LICENSE)
