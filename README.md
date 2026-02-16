@@ -458,12 +458,22 @@ SKILL BLOCKED: "malicious-skill" failed SkillSeal verification
 
 ## Roadmap
 
-- [x] **SSH signing support** — Ed25519 SSH keys alongside GPG, for interop with projects using git SSH signing
+**Shipped (v0.2.0):**
+
+- [x] **SSH signing support** — Ed25519 SSH keys alongside GPG
 - [x] **Multi-key signing** — Sign with multiple keys simultaneously via pluggable provider architecture
 - [x] **Multi-signature attestations** — Attestation bundles carry multiple signatures
-- [ ] **Compiled binary distribution** — `bun build --compile` for standalone binaries (no Bun runtime needed). Signed releases on GitHub.
-- [ ] **Key revocation** — Mechanism to invalidate compromised keys
-- [ ] **Hardware key support** — YubiKey/Nitrokey integration for signing operations
+
+**Near-term:**
+
+- [ ] **Compiled binaries** — `bun build --compile` standalone binaries for macOS (x64/ARM64), Linux (x64/ARM64), and Windows. No Bun runtime required. Signed GitHub Releases with SHA256 checksums.
+- [ ] **Windows compatibility** — Resolve handful of POSIX-specific code paths (`/dev/stdin`, `GPG_TTY`, `chmod`) to support GPG4Win and Windows OpenSSH.
+- [ ] **Key revocation** — Mechanism to invalidate compromised keys via trust store revocation list.
+
+**Strategic:**
+
+- [ ] **Crypto provider plugins** — Dynamic loading of third-party `SigningProvider` implementations from `~/.skillseal/providers/`. Plugin packages are signed skill packages — SkillSeal's own trust model protects its extensions. Enables: minisign, sigstore/cosign, post-quantum signatures, hardware tokens (YubiKey/PKCS#11).
+- [ ] **Agent-agnostic verification** — Configurable signed artifact (not hardcoded to `SKILL.md`/`plugin.json`), enabling any LLM agent framework to adopt SkillSeal for instruction-file integrity.
 
 ## Specifications
 
