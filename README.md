@@ -467,13 +467,13 @@ SKILL BLOCKED: "malicious-skill" failed SkillSeal verification
 **Near-term:**
 
 - [ ] **Compiled binaries** — `bun build --compile` standalone binaries for macOS (x64/ARM64), Linux (x64/ARM64), and Windows. No Bun runtime required. Signed GitHub Releases with SHA256 checksums.
-- [ ] **Windows compatibility** — Resolve handful of POSIX-specific code paths (`/dev/stdin`, `GPG_TTY`, `chmod`) to support GPG4Win and Windows OpenSSH.
 - [ ] **Key revocation** — Mechanism to invalidate compromised keys via trust store revocation list.
 
 **Strategic:**
 
 - [ ] **Crypto provider plugins** — Dynamic loading of third-party `SigningProvider` implementations from `~/.skillseal/providers/`. Plugin packages are signed skill packages — SkillSeal's own trust model protects its extensions. Enables: minisign, sigstore/cosign, post-quantum signatures, hardware tokens (YubiKey/PKCS#11).
 - [ ] **Agent-agnostic verification** — Configurable signed artifact (not hardcoded to `SKILL.md`/`plugin.json`), enabling any LLM agent framework to adopt SkillSeal for instruction-file integrity.
+- [ ] **Windows compatibility** — Resolve POSIX-specific code paths (`/dev/stdin`, `GPG_TTY`, `chmod`) to support GPG4Win and Windows OpenSSH.
 
 ## Specifications
 
