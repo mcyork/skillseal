@@ -1,176 +1,102 @@
-// SkillSeal — GPG signing
-// Wraps gpg --detach-sign --armor to produce SKILL.sig from SKILL.md
+// SkillSeal — signing orchestration
+// Delegates to provider-based signing. Creates SIGNATURES/ directory.
 
 import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { getProvider } from "./providers";
+import type { KeyConfig } from "./config";
 
 export interface SignResult {
   success: boolean;
-  sigPath: string;
-  error?: string;
+  signatures: Array<{ type: string; sigPath: string }>;
+  errors: string[];
 }
 
-export async function signSkill(skillDir: string, fingerprint?: string): Promise<SignResult> {
+/**
+ * Sign a skill's SKILL.md with all provided keys.
+ * Creates SIGNATURES/ directory with one .sig file per key.
+ */
+export async function signSkill(
+  skillDir: string,
+  keys: KeyConfig[],
+): Promise<SignResult> {
   const skillMdPath = join(skillDir, "SKILL.md");
-  const sigPath = join(skillDir, "SKILL.sig");
+  const sigDir = join(skillDir, "SIGNATURES");
 
   const file = Bun.file(skillMdPath);
   if (!(await file.exists())) {
-    return { success: false, sigPath, error: "SKILL.md not found" };
+    return { success: false, signatures: [], errors: ["SKILL.md not found"] };
   }
 
-  // Remove existing signature if present
-  const existingSig = Bun.file(sigPath);
-  if (await existingSig.exists()) {
-    const { unlink } = await import("node:fs/promises");
-    await unlink(sigPath);
-  }
-
-  const gpgArgs = ["gpg", "--detach-sign", "--armor"];
-  if (fingerprint) {
-    gpgArgs.push("--local-user", fingerprint);
-  }
-  gpgArgs.push("--output", sigPath, "--", skillMdPath);
-
-  const proc = Bun.spawn(
-    gpgArgs,
-    {
-      stdout: "pipe",
-      stderr: "pipe",
-    }
-  );
-
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    return { success: false, sigPath, error: `gpg signing failed: ${stderr.trim()}` };
-  }
-
-  return { success: true, sigPath };
-}
-
-export async function getSigningFingerprint(): Promise<string | null> {
-  const proc = Bun.spawn(
-    ["gpg", "--list-secret-keys", "--with-colons"],
-    {
-      stdout: "pipe",
-      stderr: "pipe",
-    }
-  );
-
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) return null;
-
-  const output = await new Response(proc.stdout).text();
-  const lines = output.split("\n");
-
-  // Find the first fingerprint line (fpr) after a secret key (sec)
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].startsWith("sec:") || lines[i].startsWith("sec#:")) {
-      // Look for the fpr line that follows
-      for (let j = i + 1; j < lines.length; j++) {
-        if (lines[j].startsWith("fpr:")) {
-          const parts = lines[j].split(":");
-          return parts[9] || null;
-        }
-        if (lines[j].startsWith("sec:") || lines[j].startsWith("sec#:")) break;
-      }
-    }
-  }
-
-  return null;
+  return signArtifact(skillMdPath, sigDir, keys);
 }
 
 /**
- * Check if gpg-agent has any cached passphrases.
- * Returns true if at least one key has a cached passphrase (cache is "warm").
+ * Sign a plugin's plugin.json with all provided keys.
+ * Creates SIGNATURES/ directory with one .sig file per key.
  */
-export async function isCacheWarm(): Promise<boolean> {
-  try {
-    const proc = Bun.spawn(
-      ["gpg-connect-agent", "keyinfo --list", "/bye"],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-    const exitCode = await proc.exited;
-    if (exitCode !== 0) return false;
-    const output = await new Response(proc.stdout).text();
-    // Lines starting with "S KEYINFO" — field 7 is "1" if cached
-    for (const line of output.split("\n")) {
-      if (line.startsWith("S KEYINFO")) {
-        const fields = line.split(" ");
-        if (fields[7] === "1") return true;
-      }
+export async function signPlugin(
+  pluginDir: string,
+  keys: KeyConfig[],
+): Promise<SignResult> {
+  const pluginJsonPath = join(pluginDir, ".claude-plugin", "plugin.json");
+  const sigDir = join(pluginDir, "SIGNATURES");
+
+  const file = Bun.file(pluginJsonPath);
+  if (!(await file.exists())) {
+    return { success: false, signatures: [], errors: [".claude-plugin/plugin.json not found"] };
+  }
+
+  return signArtifact(pluginJsonPath, sigDir, keys);
+}
+
+/**
+ * Sign an artifact file with all provided keys.
+ * Each key produces SIGNATURES/{type}.sig
+ */
+async function signArtifact(
+  artifactPath: string,
+  sigDir: string,
+  keys: KeyConfig[],
+): Promise<SignResult> {
+  await mkdir(sigDir, { recursive: true });
+
+  const signatures: Array<{ type: string; sigPath: string }> = [];
+  const errors: string[] = [];
+
+  for (const key of keys) {
+    const provider = getProvider(key.type);
+    if (!provider) {
+      errors.push(`No provider registered for key type: ${key.type}`);
+      continue;
     }
-    return false;
-  } catch {
-    return false;
-  }
-}
 
-/**
- * Kill gpg-agent, clearing all cached passphrases.
- */
-export async function clearCache(): Promise<boolean> {
-  const proc = Bun.spawn(
-    ["gpgconf", "--kill", "gpg-agent"],
-    { stdout: "pipe", stderr: "pipe" }
-  );
-  return (await proc.exited) === 0;
-}
+    const sigPath = join(sigDir, `${key.type}.sig`);
+    const keyRef = key.key_path || key.fingerprint;
 
-/**
- * Sign an arbitrary file with a detached GPG signature.
- * Used for both SKILL.md and trust-store.json.
- */
-export async function signFile(
-  filePath: string,
-  sigPath: string,
-  fingerprint: string
-): Promise<{ success: boolean; error?: string }> {
-  // Remove existing signature if present
-  const existingSig = Bun.file(sigPath);
-  if (await existingSig.exists()) {
-    const { unlink } = await import("node:fs/promises");
-    await unlink(sigPath);
+    const result = await provider.signFile(artifactPath, sigPath, keyRef);
+    if (result.success) {
+      signatures.push({ type: key.type, sigPath });
+    } else {
+      errors.push(`${key.type} signing failed: ${result.error || "unknown error"}`);
+    }
   }
 
-  const proc = Bun.spawn(
-    ["gpg", "--detach-sign", "--armor", "--local-user", fingerprint, "--output", sigPath, "--", filePath],
-    { stdout: "pipe", stderr: "pipe" }
-  );
-
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    return { success: false, error: `gpg signing failed: ${stderr.trim()}` };
-  }
-  return { success: true };
+  return {
+    success: signatures.length > 0,
+    signatures,
+    errors,
+  };
 }
 
-/**
- * Verify a detached GPG signature against a file.
- * Returns true if the signature is valid.
- */
-export async function verifyFileSignature(
-  filePath: string,
-  sigPath: string
-): Promise<boolean> {
-  const sigFile = Bun.file(sigPath);
-  if (!(await sigFile.exists())) return false;
-
-  const proc = Bun.spawn(
-    ["gpg", "--verify", "--", sigPath, filePath],
-    { stdout: "pipe", stderr: "pipe" }
-  );
-  return (await proc.exited) === 0;
-}
+// ---------------------------------------------------------------------------
+// GPG key UID lookup (used by CLI for display)
+// ---------------------------------------------------------------------------
 
 export async function getKeyUid(fingerprint: string): Promise<{ name?: string; email?: string } | null> {
   const proc = Bun.spawn(
     ["gpg", "--list-keys", "--with-colons", fingerprint],
-    {
-      stdout: "pipe",
-      stderr: "pipe",
-    }
+    { stdout: "pipe", stderr: "pipe" }
   );
 
   const exitCode = await proc.exited;
@@ -183,7 +109,6 @@ export async function getKeyUid(fingerprint: string): Promise<{ name?: string; e
     if (line.startsWith("uid:")) {
       const parts = line.split(":");
       const uidField = parts[9] || "";
-      // Parse "Name <email>" format
       const match = uidField.match(/^(.+?)\s*<(.+?)>$/);
       if (match) {
         return { name: match[1].trim(), email: match[2].trim() };

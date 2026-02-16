@@ -4,47 +4,56 @@
 
 ## Overview
 
-The SkillSeal trust store is a GPG-signed local JSON file that records which authors and reviewers the user trusts, and defines policies for how the agent should handle skills based on their trust signals. It is conceptually similar to a browser's CA certificate trust store.
+The SkillSeal trust store is a cryptographically signed local JSON file that records which authors and reviewers the user trusts, and defines policies for how the agent should handle skills based on their trust signals. It is conceptually similar to a browser's CA certificate trust store.
 
-The trust store is the root of all trust decisions. Its integrity is protected by a detached GPG signature — SkillSeal will not load a trust store with a missing or invalid signature.
+The trust store is the root of all trust decisions. Its integrity is protected by detached signatures from all configured keys — SkillSeal will not load a trust store with missing or invalid signatures.
 
 ## Location
 
 ```
-~/.skillseal/trust-store.json       # Trust store data
-~/.skillseal/trust-store.json.sig   # Detached GPG signature
+~/.skillseal/trust-store.json              # Trust store data
+~/.skillseal/trust-store.signatures/       # Signature directory
+  gpg.sig                                   # GPG signature
+  ssh.sig                                   # SSH signature
 ```
+
+Legacy location (v0.1.0): `~/.skillseal/trust-store.json.sig` (single GPG signature). SkillSeal v0.2.0 checks the `trust-store.signatures/` directory first, then falls back to the legacy `.sig` file.
 
 If the file does not exist, SkillSeal operates with an empty trust store (no authors or reviewers are trusted, and the default policy applies).
 
 ## Integrity Protection
 
-Every time the trust store is saved, it is GPG-signed with the user's key (from `~/.skillseal/config.json`). Every time it is loaded, the signature is verified. If verification fails:
+Every time the trust store is saved, it is signed with all configured keys (from `~/.skillseal/config.json`). Signatures are stored in `~/.skillseal/trust-store.signatures/`. Every time it is loaded, at least one signature must verify. If verification fails:
 
 - The trust store is treated as empty (no trust, defaults only)
-- A warning is printed: `WARNING: Trust store GPG signature is INVALID. Possible tampering.`
+- A warning is printed: `WARNING: Trust store signature is INVALID or missing. Treating as empty.`
 
-This prevents direct file edits from being accepted. However, if the GPG passphrase cache is warm, programmatic modifications via `skillseal trust` commands will be signed automatically. See the README's "Hardening the Trust Store" section for mitigation.
+This prevents direct file edits from being accepted. However, if the signing key caches are warm, programmatic modifications via `skillseal trust` commands will be signed automatically. See the README's "Hardening the Trust Store" section for mitigation.
 
 ## Schema
 
 ```json
 {
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "trusted_authors": {
     "github-username": {
-      "name": "Author Name",
-      "fingerprint": "ABCDEF1234567890...",
+      "keys": [
+        { "type": "gpg", "fingerprint": "ABCDEF1234567890..." },
+        { "type": "ssh", "fingerprint": "SHA256:..." }
+      ],
       "trust_level": "author",
+      "name": "Author Name",
       "added_at": "2026-02-14T00:00:00Z",
       "note": "Reason for trust"
     }
   },
   "trusted_reviewers": {
     "reviewer-name": {
-      "name": "Reviewer Display Name",
-      "fingerprint": "FEDCBA0987654321...",
+      "keys": [
+        { "type": "gpg", "fingerprint": "FEDCBA0987654321..." }
+      ],
       "trust_level": "reviewer",
+      "name": "Reviewer Display Name",
       "added_at": "2026-02-14T00:00:00Z",
       "note": "Reason for trust"
     }
@@ -65,7 +74,7 @@ This prevents direct file edits from being accepted. However, if the GPG passphr
 
 ### `schema_version`
 
-String. The version of the trust store schema. Current version: `"0.1.0"`.
+String. The version of the trust store schema. Current version: `"0.2.0"`.
 
 ### `trusted_authors`
 
@@ -73,23 +82,24 @@ Object. Keys are GitHub usernames. Each value contains:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | no | Human-readable display name |
-| `fingerprint` | string | yes | Full GPG key fingerprint (40 hex chars, uppercase) |
+| `keys` | array | yes | Array of `{type, fingerprint}` objects — the trusted key(s) for this entity |
 | `trust_level` | string | yes | Must be `"author"` |
+| `name` | string | no | Human-readable display name |
 | `added_at` | string | no | ISO 8601 timestamp of when this entry was added |
 | `note` | string | no | Human-readable note about why this author is trusted |
 
-### `trusted_reviewers`
-
-Object. Keys are reviewer identifiers (GitHub username or org name). Each value contains:
+Each key in the `keys` array:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | no | Human-readable display name |
-| `fingerprint` | string | yes | Full GPG key fingerprint (40 hex chars, uppercase) |
-| `trust_level` | string | yes | Must be `"reviewer"` |
-| `added_at` | string | no | ISO 8601 timestamp of when this entry was added |
-| `note` | string | no | Human-readable note about why this reviewer is trusted |
+| `type` | string | yes | Key type (e.g., `"gpg"`, `"ssh"`) |
+| `fingerprint` | string | yes | Key fingerprint (40 hex chars for GPG, `SHA256:...` for SSH) |
+
+Trust verification checks if ANY key in the entity's `keys` array matches the signature's fingerprint. This allows entities to have multiple key types.
+
+### `trusted_reviewers`
+
+Object. Keys are reviewer identifiers (GitHub username or org name). Each value has the same structure as `trusted_authors`, with `trust_level` set to `"reviewer"`.
 
 ### `policies`
 
@@ -139,7 +149,7 @@ The key principle: **attestation trust overrides author trust**. If a trusted re
 ```
 Skill package discovered
   │
-  ├── Has SKILL.sig and TRUST.json?
+  ├── Has SIGNATURES/ and TRUST.json?
   │     │
   │     ├── No ──> Has valid attestation from trusted reviewer?
   │     │           │
@@ -147,7 +157,7 @@ Skill package discovered
   │     │           ├── Yes (stale)   ──> apply "known_author_stale_attestations" policy
   │     │           └── No            ──> apply "unsigned" policy
   │     │
-  │     └── Yes ──> Verify signature
+  │     └── Yes ──> Verify signature (any one valid sig in SIGNATURES/)
   │           │
   │           ├── Invalid ──> apply "signature_invalid" policy
   │           │
@@ -161,7 +171,7 @@ Skill package discovered
   │                       │
   │                       ├── Unknown author ──> apply "unknown_author" policy
   │                       │
-  │                       └── Known author ──> Check attestation presence
+  │                       └── Known author (any key matches) ──> Check attestation presence
   │                             │
   │                             ├── No attestations       ──> apply "known_author_no_attestations" policy
   │                             └── Untrusted attestations ──> apply "known_author_with_attestations" policy
@@ -170,18 +180,28 @@ Skill package discovered
 ## CLI Management
 
 ```bash
-# Add a trusted author
+# Add a trusted author (auto-detects key type from fingerprint format)
 skillseal trust add <github-username> <fingerprint> [--name "Name"] [--note "reason"]
 
 # Add a trusted reviewer
 skillseal trust add <github-username> <fingerprint> --reviewer [--name "Name"]
 
-# Remove an entity (from both authors and reviewers)
+# Add an additional key to an existing entity
+skillseal trust add-key <github-username> <fingerprint>
+
+# Remove a specific key from an entity
+skillseal trust remove-key <github-username> <fingerprint>
+
+# Remove an entity entirely (from both authors and reviewers)
 skillseal trust remove <github-username>
 
-# List all trusted entities
+# List all trusted entities and their keys
 skillseal trust list
 
 # Change a policy
 skillseal trust set-policy <scenario> <action>
 ```
+
+## Migration from v0.1.0
+
+Trust store entities with a single `fingerprint` field (v0.1.0 format) are automatically migrated to the `keys[]` array format on load. The key type is inferred from the fingerprint format: `SHA256:` prefix indicates SSH, otherwise GPG.

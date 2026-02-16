@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // SkillSeal CLI — entry point and command router
+// v0.2.0: Multi-key provider-based signing
 
 import { signCommand } from "./sign";
 import { signAllCommand } from "./sign-all";
@@ -7,18 +8,28 @@ import { verifyCommand } from "./verify";
 import { initCommand } from "./init";
 import { trustCommand } from "./trust";
 import { attestCommand } from "./attest";
-import { clearCache } from "../lib";
+import { loadConfig, getConfigKeys, getAllProviders } from "../lib";
 
 const USAGE = `skillseal — Cryptographic signing and verification for LLM agent skills and plugins
 
 Usage:
-  skillseal sign <dir>      Sign a skill or plugin (auto-detected)
+  skillseal sign <dir>      Sign a skill or plugin with all configured keys
   skillseal sign-all <dir>  Sign all skills and plugins in a directory
-  skillseal verify <dir>    Verify a skill or plugin (auto-detected)
-  skillseal attest <dir>    Create an attestation bundle for a skill
+  skillseal verify <dir>    Verify a skill or plugin (auto-detects key types)
+  skillseal attest <dir>    Create a multi-signature attestation bundle
   skillseal init <dir>      Scaffold a new skill package
-  skillseal trust <cmd>     Manage trust store (add, remove, list, set-policy)
-  skillseal cache-clear     Kill gpg-agent and clear cached passphrases
+  skillseal trust <cmd>     Manage trust store (add, remove, add-key, remove-key, list, set-policy)
+  skillseal cache-clear     Clear cached credentials for all providers
+
+Configuration (~/.skillseal/config.json):
+  {
+    "github": "your-username",
+    "author": "Your Name",
+    "keys": [
+      { "type": "gpg", "fingerprint": "40-hex-char-fingerprint" },
+      { "type": "ssh", "fingerprint": "SHA256:...", "key_path": "~/.ssh/skillseal_ed25519" }
+    ]
+  }
 
 Plugin detection:
   If <dir> contains .claude-plugin/plugin.json, it is treated as a plugin.
@@ -29,7 +40,7 @@ Options:
   --version Show version
 `;
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -69,12 +80,22 @@ async function main() {
   }
 
   if (command === "cache-clear") {
-    const ok = await clearCache();
-    if (ok) {
-      console.log("GPG agent killed. All cached passphrases cleared.");
-      console.log("Next signing or trust operation will require your passphrase.");
+    // Clear cache for all registered providers
+    const providers = getAllProviders();
+    let anyCleared = false;
+
+    for (const provider of providers) {
+      const ok = await provider.clearCache();
+      if (ok) {
+        console.log(`${provider.type.toUpperCase()} cache cleared.`);
+        anyCleared = true;
+      }
+    }
+
+    if (anyCleared) {
+      console.log("Next signing or trust operation may require your passphrase.");
     } else {
-      console.error("Failed to kill gpg-agent. Is it running?");
+      console.error("No caches cleared. Are signing agents running?");
       process.exit(1);
     }
     return;

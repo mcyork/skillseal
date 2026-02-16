@@ -1,19 +1,19 @@
 // SkillSeal CLI — sign command
-// Generates manifest, signs SKILL.md (or plugin.json), writes signature + TRUST.json + MANIFEST.json
+// Multi-key provider-based signing. Creates SIGNATURES/ directory with one .sig per key type.
 
 import { join } from "node:path";
 import {
   writeManifest,
   hashManifest,
   signSkill,
-  signFile,
-  getSigningFingerprint,
+  signPlugin,
   getKeyUid,
   loadConfig,
-  isCacheWarm,
+  getConfigKeys,
   isPlugin,
+  getProvider,
 } from "../lib";
-import type { TrustJson } from "../lib";
+import type { TrustJson, TrustJsonKey, KeyConfig } from "../lib";
 
 const MAX_CONVERGENCE_ITERATIONS = 10;
 
@@ -41,6 +41,27 @@ function serializeFrontmatter(yaml: Record<string, string>, body: string): strin
   return `---\n${lines.join("\n")}\n---\n${body}`;
 }
 
+/** Build TRUST.json keys array from config keys */
+function buildTrustKeys(keys: KeyConfig[], github: string): TrustJsonKey[] {
+  return keys.map((key) => {
+    let keyUrl: string;
+    if (key.key_url) {
+      keyUrl = key.key_url;
+    } else if (key.type === "ssh") {
+      keyUrl = `https://api.github.com/users/${github}/ssh_signing_keys`;
+    } else if (key.type === "gpg") {
+      keyUrl = github ? `https://github.com/${github}.gpg` : "";
+    } else {
+      keyUrl = "";
+    }
+    return {
+      type: key.type,
+      fingerprint: key.fingerprint,
+      key_url: keyUrl,
+    };
+  });
+}
+
 export async function signCommand(skillDir: string): Promise<void> {
   // Auto-detect: plugin or skill
   if (await isPlugin(skillDir)) {
@@ -49,8 +70,21 @@ export async function signCommand(skillDir: string): Promise<void> {
 
   console.log(`Signing skill package: ${skillDir}`);
 
-  // 0. Load user config for fallback values
+  // 0. Load user config and resolve keys
   const config = await loadConfig();
+  const keys = getConfigKeys(config);
+
+  if (keys.length === 0) {
+    throw new Error(
+      "No signing keys configured. Add keys to ~/.skillseal/config.json:\n" +
+      '  { "keys": [{ "type": "gpg", "fingerprint": "..." }, { "type": "ssh", "fingerprint": "SHA256:...", "key_path": "~/.ssh/..." }] }'
+    );
+  }
+
+  const github = config.github || "";
+  if (!github) {
+    throw new Error("~/.skillseal/config.json must contain 'github' field.");
+  }
 
   // 1. Check SKILL.md exists
   const skillMdPath = join(skillDir, "SKILL.md");
@@ -66,41 +100,33 @@ export async function signCommand(skillDir: string): Promise<void> {
     throw new Error("SKILL.md has no YAML frontmatter. Add a --- delimited header.");
   }
 
-  // 3. Get signing key fingerprint
-  // Priority: SKILL.md frontmatter > config.json > auto-detect
-  let fingerprint: string | null = null;
-  const declaredFp = parsed.yaml["author_fingerprint"] || config.fingerprint;
-  if (declaredFp) {
-    // Verify this key exists in the secret keyring
-    const checkProc = Bun.spawn(
-      ["gpg", "--list-secret-keys", "--with-colons", "--", declaredFp],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-    const checkExit = await checkProc.exited;
-    if (checkExit === 0) {
-      fingerprint = declaredFp;
+  // 3. Display signing keys
+  console.log(`  Keys (${keys.length}):`);
+  for (const key of keys) {
+    const label = key.type.toUpperCase();
+    const ref = key.key_path || key.fingerprint;
+    console.log(`    ${label}: ${ref}`);
+  }
+
+  // 4. Resolve author identity for TRUST.json
+  let authorName = config.author || "";
+  if (!authorName) {
+    // Try getting name from GPG key UID
+    const gpgKey = keys.find((k) => k.type === "gpg");
+    if (gpgKey) {
+      const uid = await getKeyUid(gpgKey.fingerprint);
+      if (uid?.name) authorName = uid.name;
     }
   }
-  if (!fingerprint) {
-    fingerprint = await getSigningFingerprint();
-  }
-  if (!fingerprint) {
-    throw new Error("No GPG secret key found. Generate one with: gpg --gen-key");
-  }
-  console.log(`  Using GPG key: ${fingerprint}`);
 
-  const uid = await getKeyUid(fingerprint);
-
-  // 4. Write TRUST.json first (excluded from manifest, so no convergence issue)
-  const github = parsed.yaml["github"] || config.github || "";
+  // 5. Write TRUST.json (excluded from manifest, so no convergence issue)
   const trustData: TrustJson = {
-    schema_version: "0.1.0",
+    schema_version: "0.2.0",
     author: {
-      name: uid?.name || parsed.yaml["author"] || "",
-      email: uid?.email || parsed.yaml["author"] || "",
+      name: authorName || parsed.yaml["author"] || "",
+      email: parsed.yaml["email"] || "",
       github,
-      fingerprint,
-      key_url: github ? `https://github.com/${github}.gpg` : "",
+      keys: buildTrustKeys(keys, github),
     },
     attestations: [],
   };
@@ -110,9 +136,9 @@ export async function signCommand(skillDir: string): Promise<void> {
   const existingTrust = Bun.file(trustPath);
   if (await existingTrust.exists()) {
     try {
-      const existing: TrustJson = await existingTrust.json();
+      const existing = await existingTrust.json() as { attestations?: unknown[] };
       if (existing.attestations && existing.attestations.length > 0) {
-        trustData.attestations = existing.attestations;
+        trustData.attestations = existing.attestations as TrustJson["attestations"];
       }
     } catch {
       // Ignore parse errors, overwrite
@@ -122,15 +148,12 @@ export async function signCommand(skillDir: string): Promise<void> {
   await Bun.write(trustPath, JSON.stringify(trustData, null, 2) + "\n");
   console.log("  Wrote TRUST.json");
 
-  // 5. Update frontmatter fields
+  // 6. Update frontmatter fields
   parsed.yaml["signed"] = "true";
-  parsed.yaml["author_fingerprint"] = fingerprint;
+  // Remove old single-key fields if present
+  delete parsed.yaml["author_fingerprint"];
 
-  // 6. Converge SKILL.md <-> MANIFEST.json
-  // Since TRUST.json is excluded from manifest, only SKILL.md content affects
-  // the manifest hash. We iterate until the manifest_hash in SKILL.md matches
-  // the actual MANIFEST.json hash.
-  // Use a fixed timestamp so the manifest hash is stable across iterations.
+  // 7. Converge SKILL.md <-> MANIFEST.json
   console.log("  Generating MANIFEST.json...");
   const manifestTimestamp = new Date().toISOString();
   let converged = false;
@@ -154,23 +177,33 @@ export async function signCommand(skillDir: string): Promise<void> {
 
   console.log(`  Manifest hash converged: ${parsed.yaml["manifest_hash"]}`);
 
-  // 7. Sign SKILL.md
+  // 8. Sign SKILL.md with ALL configured keys → SIGNATURES/ directory
   console.log("  Signing SKILL.md...");
-  const signResult = await signSkill(skillDir, fingerprint);
+  const signResult = await signSkill(skillDir, keys);
   if (!signResult.success) {
-    throw new Error(signResult.error || "GPG signing failed");
+    throw new Error(`Signing failed:\n  ${signResult.errors.join("\n  ")}`);
   }
-  console.log(`  Wrote ${signResult.sigPath}`);
+
+  for (const sig of signResult.signatures) {
+    console.log(`  Wrote SIGNATURES/${sig.type}.sig`);
+  }
+  if (signResult.errors.length > 0) {
+    for (const err of signResult.errors) {
+      console.warn(`  Warning: ${err}`);
+    }
+  }
 
   console.log("\nSkill package signed successfully.");
-  console.log(`  Author: ${trustData.author.name} <${trustData.author.email}>`);
-  console.log(`  Fingerprint: ${fingerprint}`);
+  console.log(`  Author: ${trustData.author.name}`);
   console.log(`  GitHub: ${github}`);
+  console.log(`  Keys: ${signResult.signatures.map((s) => s.type.toUpperCase()).join(", ")}`);
 
-  // Warn if GPG cache is warm — signing happened without passphrase prompt
-  if (await isCacheWarm()) {
-    console.log("\n  NOTE: GPG passphrase cache is active. Signing did not require");
-    console.log("  manual passphrase entry. To clear: skillseal cache-clear");
+  // Cache status per provider
+  for (const key of keys) {
+    const provider = getProvider(key.type);
+    if (provider && await provider.isCacheWarm()) {
+      console.log(`  NOTE: ${key.type.toUpperCase()} cache is active (signing did not require passphrase).`);
+    }
   }
 }
 
@@ -181,7 +214,6 @@ interface PluginJson {
   version: string;
   author?: { name: string; email?: string };
   signed?: boolean;
-  author_fingerprint?: string;
   manifest_hash?: string;
   [key: string]: unknown;
 }
@@ -190,8 +222,21 @@ async function signPluginCommand(pluginDir: string): Promise<void> {
   const pluginJsonPath = join(pluginDir, ".claude-plugin", "plugin.json");
   console.log(`Signing plugin: ${pluginDir}`);
 
-  // 0. Load user config
+  // 0. Load user config and resolve keys
   const config = await loadConfig();
+  const keys = getConfigKeys(config);
+
+  if (keys.length === 0) {
+    throw new Error(
+      "No signing keys configured. Add keys to ~/.skillseal/config.json:\n" +
+      '  { "keys": [{ "type": "gpg", "fingerprint": "..." }] }'
+    );
+  }
+
+  const github = config.github || "";
+  if (!github) {
+    throw new Error("~/.skillseal/config.json must contain 'github' field.");
+  }
 
   // 1. Read plugin.json
   const pluginJsonFile = Bun.file(pluginJsonPath);
@@ -210,38 +255,33 @@ async function signPluginCommand(pluginDir: string): Promise<void> {
     throw new Error("plugin.json missing required 'name' field");
   }
 
-  // 2. Get signing key fingerprint
-  let fingerprint: string | null = null;
-  const declaredFp = (pluginData.author_fingerprint as string) || config.fingerprint;
-  if (declaredFp) {
-    const checkProc = Bun.spawn(
-      ["gpg", "--list-secret-keys", "--with-colons", "--", declaredFp],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-    if ((await checkProc.exited) === 0) {
-      fingerprint = declaredFp;
+  // 2. Display signing keys
+  console.log(`  Keys (${keys.length}):`);
+  for (const key of keys) {
+    console.log(`    ${key.type.toUpperCase()}: ${key.key_path || key.fingerprint}`);
+  }
+
+  // 3. Resolve author identity
+  let authorName = config.author || "";
+  if (!authorName) {
+    const gpgKey = keys.find((k) => k.type === "gpg");
+    if (gpgKey) {
+      const uid = await getKeyUid(gpgKey.fingerprint);
+      if (uid?.name) authorName = uid.name;
     }
   }
-  if (!fingerprint) {
-    fingerprint = await getSigningFingerprint();
+  if (!authorName) {
+    authorName = pluginData.author?.name || "";
   }
-  if (!fingerprint) {
-    throw new Error("No GPG secret key found. Generate one with: gpg --gen-key");
-  }
-  console.log(`  Using GPG key: ${fingerprint}`);
 
-  const uid = await getKeyUid(fingerprint);
-  const github = config.github || "";
-
-  // 3. Write TRUST.json at plugin root
+  // 4. Write TRUST.json at plugin root
   const trustData: TrustJson = {
-    schema_version: "0.1.0",
+    schema_version: "0.2.0",
     author: {
-      name: uid?.name || pluginData.author?.name || "",
-      email: uid?.email || pluginData.author?.email || "",
+      name: authorName,
+      email: pluginData.author?.email || "",
       github,
-      fingerprint,
-      key_url: github ? `https://github.com/${github}.gpg` : "",
+      keys: buildTrustKeys(keys, github),
     },
     attestations: [],
   };
@@ -250,9 +290,9 @@ async function signPluginCommand(pluginDir: string): Promise<void> {
   const existingTrust = Bun.file(trustPath);
   if (await existingTrust.exists()) {
     try {
-      const existing: TrustJson = await existingTrust.json();
+      const existing = await existingTrust.json() as { attestations?: unknown[] };
       if (existing.attestations && existing.attestations.length > 0) {
-        trustData.attestations = existing.attestations;
+        trustData.attestations = existing.attestations as TrustJson["attestations"];
       }
     } catch {
       // Ignore parse errors, overwrite
@@ -262,13 +302,12 @@ async function signPluginCommand(pluginDir: string): Promise<void> {
   await Bun.write(trustPath, JSON.stringify(trustData, null, 2) + "\n");
   console.log("  Wrote TRUST.json");
 
-  // 4. Update plugin.json signing fields
+  // 5. Update plugin.json signing fields
   pluginData.signed = true;
-  pluginData.author_fingerprint = fingerprint;
+  // Remove old single-key fields
+  delete pluginData.author_fingerprint;
 
-  // 5. Converge plugin.json <-> MANIFEST.json
-  // plugin.json is excluded from manifest (like SKILL.md for skills),
-  // but its content affects its own hash, so we iterate until stable.
+  // 6. Converge plugin.json <-> MANIFEST.json
   console.log("  Generating MANIFEST.json...");
   const manifestTimestamp = new Date().toISOString();
   let converged = false;
@@ -291,23 +330,32 @@ async function signPluginCommand(pluginDir: string): Promise<void> {
 
   console.log(`  Manifest hash converged: ${pluginData.manifest_hash}`);
 
-  // 6. Sign plugin.json → PLUGIN.sig at plugin root
+  // 7. Sign plugin.json with ALL configured keys → SIGNATURES/
   console.log("  Signing plugin.json...");
-  const sigPath = join(pluginDir, "PLUGIN.sig");
-  const signResult = await signFile(pluginJsonPath, sigPath, fingerprint);
+  const signResult = await signPlugin(pluginDir, keys);
   if (!signResult.success) {
-    throw new Error(signResult.error || "GPG signing failed");
+    throw new Error(`Signing failed:\n  ${signResult.errors.join("\n  ")}`);
   }
-  console.log(`  Wrote PLUGIN.sig`);
+
+  for (const sig of signResult.signatures) {
+    console.log(`  Wrote SIGNATURES/${sig.type}.sig`);
+  }
+  if (signResult.errors.length > 0) {
+    for (const err of signResult.errors) {
+      console.warn(`  Warning: ${err}`);
+    }
+  }
 
   const version = pluginData.version || "unknown";
   console.log(`\nPlugin signed: ${pluginData.name} v${version}`);
-  console.log(`  Author: ${trustData.author.name} <${trustData.author.email}>`);
-  console.log(`  Fingerprint: ${fingerprint}`);
+  console.log(`  Author: ${trustData.author.name}`);
   console.log(`  GitHub: ${github}`);
+  console.log(`  Keys: ${signResult.signatures.map((s) => s.type.toUpperCase()).join(", ")}`);
 
-  if (await isCacheWarm()) {
-    console.log("\n  NOTE: GPG passphrase cache is active. Signing did not require");
-    console.log("  manual passphrase entry. To clear: skillseal cache-clear");
+  for (const key of keys) {
+    const provider = getProvider(key.type);
+    if (provider && await provider.isCacheWarm()) {
+      console.log(`  NOTE: ${key.type.toUpperCase()} cache is active (signing did not require passphrase).`);
+    }
   }
 }

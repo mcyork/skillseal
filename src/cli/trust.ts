@@ -1,8 +1,9 @@
 // SkillSeal CLI — trust command
 // Manage the local trust store: add/remove authors and reviewers, list trusted entities
+// v0.2.0: Multi-key entities
 
 import { loadTrustStore, saveTrustStore } from "../lib";
-import type { TrustedEntity, PolicyScenario, PolicyAction } from "../lib";
+import type { TrustedEntity, TrustedEntityKey, PolicyScenario, PolicyAction } from "../lib";
 
 const VALID_SCENARIOS: PolicyScenario[] = [
   "unsigned",
@@ -19,10 +20,16 @@ const VALID_ACTIONS: PolicyAction[] = ["refuse", "prompt", "allow", "install_sil
 const TRUST_USAGE = `skillseal trust — Manage the local trust store
 
 Usage:
-  skillseal trust add <github-username> <fingerprint> [--name "Display Name"] [--note "reason"]
+  skillseal trust add <github-username> <fingerprint> [--name "Display Name"] [--note "reason"] [--key-type ssh|gpg]
+  skillseal trust add-key <github-username> <fingerprint> [--key-type ssh|gpg]
   skillseal trust remove <github-username>
+  skillseal trust remove-key <github-username> <fingerprint>
   skillseal trust list
   skillseal trust set-policy <scenario> <action>
+
+Fingerprint formats:
+  GPG: 40 hex characters (e.g., 7097CE1EF54E0808FD3855427ED9682FF64286D0)
+  SSH: SHA256:base64 (e.g., SHA256:3s0+7dofit6Wb8FYp3gEXkP+9UjsfKm92cc0rRWoOvE)
 
 Scenarios:
   unsigned, signature_invalid, unknown_author, known_author_no_attestations,
@@ -41,9 +48,39 @@ function parseFlags(args: string[]): Record<string, string> {
       flags.note = args[++i];
     } else if (args[i] === "--reviewer") {
       flags.reviewer = "true";
+    } else if (args[i] === "--key-type" && args[i + 1]) {
+      const kt = args[++i];
+      if (kt !== "gpg" && kt !== "ssh") {
+        console.error(`Error: --key-type must be "gpg" or "ssh", got "${kt}"`);
+        process.exit(1);
+      }
+      flags.key_type = kt;
     }
   }
   return flags;
+}
+
+/** Detect key type from fingerprint format */
+function detectKeyType(fingerprint: string, explicitType?: string): string {
+  if (explicitType) return explicitType;
+  if (fingerprint.startsWith("SHA256:")) return "ssh";
+  return "gpg";
+}
+
+/** Validate and normalize a fingerprint based on key type */
+function normalizeFingerprint(fingerprint: string, keyType: string): string {
+  if (keyType === "ssh") {
+    if (!fingerprint.startsWith("SHA256:")) {
+      throw new Error(`Invalid SSH fingerprint: must start with "SHA256:", got "${fingerprint}"`);
+    }
+    return fingerprint;
+  }
+  // GPG fingerprints: 40 hex characters
+  const normalized = fingerprint.toUpperCase().replace(/\s/g, "");
+  if (!/^[A-F0-9]{40}$/.test(normalized)) {
+    throw new Error(`Invalid GPG fingerprint: must be 40 hex characters, got "${fingerprint}"`);
+  }
+  return normalized;
 }
 
 export async function trustCommand(args: string[]): Promise<void> {
@@ -58,8 +95,14 @@ export async function trustCommand(args: string[]): Promise<void> {
     case "add":
       await trustAdd(args.slice(1));
       break;
+    case "add-key":
+      await trustAddKey(args.slice(1));
+      break;
     case "remove":
       await trustRemove(args.slice(1));
+      break;
+    case "remove-key":
+      await trustRemoveKey(args.slice(1));
       break;
     case "list":
       await trustList();
@@ -78,31 +121,41 @@ async function trustAdd(args: string[]): Promise<void> {
   const positional = args.filter((a) => !a.startsWith("--"));
   const flags = parseFlags(args);
 
-  // Handle the case where --name or --note consumed a positional arg
   const github = positional[0];
   const fingerprint = positional[1];
 
   if (!github || !fingerprint) {
-    console.error("Usage: skillseal trust add <github-username> <fingerprint> [--name \"Name\"] [--note \"reason\"]");
+    console.error("Usage: skillseal trust add <github-username> <fingerprint> [--name \"Name\"] [--note \"reason\"] [--key-type ssh|gpg]");
     process.exit(1);
   }
 
-  const normalized = fingerprint.toUpperCase().replace(/\s/g, "");
-  if (!/^[A-F0-9]{40}$/.test(normalized)) {
-    throw new Error(`Invalid fingerprint: must be 40 hex characters, got "${fingerprint}"`);
-  }
+  const keyType = detectKeyType(fingerprint, flags.key_type);
+  const normalized = normalizeFingerprint(fingerprint, keyType);
 
   const store = await loadTrustStore();
   const isReviewer = flags.reviewer === "true";
   const bucket = isReviewer ? "trusted_reviewers" : "trusted_authors";
 
-  const entity: TrustedEntity = {
-    fingerprint: normalized,
-    trust_level: isReviewer ? "reviewer" : "author",
-    added_at: new Date().toISOString(),
-  };
+  const existingEntity = store[bucket][github];
+  const entity: TrustedEntity = existingEntity
+    ? { ...existingEntity }
+    : {
+        keys: [],
+        trust_level: isReviewer ? "reviewer" : "author",
+        added_at: new Date().toISOString(),
+      };
+
   if (flags.name) entity.name = flags.name;
   if (flags.note) entity.note = flags.note;
+
+  // Add key if not already present
+  const keyExists = entity.keys.some(
+    (k) => k.type === keyType && k.fingerprint.toUpperCase().replace(/\s/g, "") === normalized.toUpperCase().replace(/\s/g, "")
+  );
+
+  if (!keyExists) {
+    entity.keys.push({ type: keyType, fingerprint: normalized });
+  }
 
   const existed = !!store[bucket][github];
   store[bucket][github] = entity;
@@ -111,9 +164,67 @@ async function trustAdd(args: string[]): Promise<void> {
   const action = existed ? "Updated" : "Added";
   const role = isReviewer ? "reviewer" : "author";
   console.log(`${action} trusted ${role}: ${github}`);
-  console.log(`  Fingerprint: ${normalized}`);
+  console.log(`  Keys (${entity.keys.length}):`);
+  for (const key of entity.keys) {
+    const marker = key.fingerprint === normalized ? " (new)" : "";
+    console.log(`    ${key.type.toUpperCase()}: ${key.fingerprint}${marker}`);
+  }
   if (flags.name) console.log(`  Name: ${flags.name}`);
   if (flags.note) console.log(`  Note: ${flags.note}`);
+}
+
+async function trustAddKey(args: string[]): Promise<void> {
+  const positional = args.filter((a) => !a.startsWith("--"));
+  const flags = parseFlags(args);
+
+  const github = positional[0];
+  const fingerprint = positional[1];
+
+  if (!github || !fingerprint) {
+    console.error("Usage: skillseal trust add-key <github-username> <fingerprint> [--key-type ssh|gpg]");
+    process.exit(1);
+  }
+
+  const keyType = detectKeyType(fingerprint, flags.key_type);
+  const normalized = normalizeFingerprint(fingerprint, keyType);
+
+  const store = await loadTrustStore();
+
+  // Find the entity in either bucket
+  let entity: TrustedEntity | undefined;
+  let bucket: "trusted_authors" | "trusted_reviewers" | undefined;
+
+  if (store.trusted_authors[github]) {
+    entity = store.trusted_authors[github];
+    bucket = "trusted_authors";
+  } else if (store.trusted_reviewers[github]) {
+    entity = store.trusted_reviewers[github];
+    bucket = "trusted_reviewers";
+  }
+
+  if (!entity || !bucket) {
+    console.error(`Entity not found in trust store: ${github}`);
+    console.error("Add them first with: skillseal trust add <github> <fingerprint>");
+    process.exit(1);
+  }
+
+  // Check if key already exists
+  const keyExists = entity.keys.some(
+    (k) => k.type === keyType && k.fingerprint.toUpperCase().replace(/\s/g, "") === normalized.toUpperCase().replace(/\s/g, "")
+  );
+
+  if (keyExists) {
+    console.log(`Key already exists for ${github}: ${keyType.toUpperCase()} ${normalized}`);
+    return;
+  }
+
+  entity.keys.push({ type: keyType, fingerprint: normalized });
+  store[bucket][github] = entity;
+  await saveTrustStore(store);
+
+  console.log(`Added key to ${github}:`);
+  console.log(`  ${keyType.toUpperCase()}: ${normalized}`);
+  console.log(`  Total keys: ${entity.keys.length}`);
 }
 
 async function trustRemove(args: string[]): Promise<void> {
@@ -140,6 +251,57 @@ async function trustRemove(args: string[]): Promise<void> {
   if (!removed) {
     console.log(`Not found in trust store: ${github}`);
     return;
+  }
+
+  await saveTrustStore(store);
+}
+
+async function trustRemoveKey(args: string[]): Promise<void> {
+  const github = args[0];
+  const fingerprint = args[1];
+
+  if (!github || !fingerprint) {
+    console.error("Usage: skillseal trust remove-key <github-username> <fingerprint>");
+    process.exit(1);
+  }
+
+  const store = await loadTrustStore();
+
+  let entity: TrustedEntity | undefined;
+  let bucket: "trusted_authors" | "trusted_reviewers" | undefined;
+
+  if (store.trusted_authors[github]) {
+    entity = store.trusted_authors[github];
+    bucket = "trusted_authors";
+  } else if (store.trusted_reviewers[github]) {
+    entity = store.trusted_reviewers[github];
+    bucket = "trusted_reviewers";
+  }
+
+  if (!entity || !bucket) {
+    console.error(`Entity not found in trust store: ${github}`);
+    process.exit(1);
+  }
+
+  const normalizedFp = fingerprint.toUpperCase().replace(/\s/g, "");
+  const originalLen = entity.keys.length;
+  entity.keys = entity.keys.filter(
+    (k) => k.fingerprint.toUpperCase().replace(/\s/g, "") !== normalizedFp
+  );
+
+  if (entity.keys.length === originalLen) {
+    console.log(`Key not found for ${github}: ${fingerprint}`);
+    return;
+  }
+
+  if (entity.keys.length === 0) {
+    // Remove entity entirely if no keys remain
+    delete store[bucket][github];
+    console.log(`Removed last key for ${github} — entity removed from trust store.`);
+  } else {
+    store[bucket][github] = entity;
+    console.log(`Removed key from ${github}: ${fingerprint}`);
+    console.log(`  Remaining keys: ${entity.keys.length}`);
   }
 
   await saveTrustStore(store);
@@ -193,7 +355,9 @@ async function trustList(): Promise<void> {
     for (const [github, entity] of authors) {
       const name = entity.name ? ` (${entity.name})` : "";
       console.log(`  ${github}${name}`);
-      console.log(`    Fingerprint: ${entity.fingerprint}`);
+      for (const key of entity.keys) {
+        console.log(`    ${key.type.toUpperCase()}: ${key.fingerprint}`);
+      }
       if (entity.note) console.log(`    Note: ${entity.note}`);
       if (entity.added_at) console.log(`    Added: ${entity.added_at}`);
     }
@@ -205,7 +369,9 @@ async function trustList(): Promise<void> {
     for (const [id, entity] of reviewers) {
       const name = entity.name ? ` (${entity.name})` : "";
       console.log(`  ${id}${name}`);
-      console.log(`    Fingerprint: ${entity.fingerprint}`);
+      for (const key of entity.keys) {
+        console.log(`    ${key.type.toUpperCase()}: ${key.fingerprint}`);
+      }
       if (entity.note) console.log(`    Note: ${entity.note}`);
       if (entity.added_at) console.log(`    Added: ${entity.added_at}`);
     }

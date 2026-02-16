@@ -1,17 +1,19 @@
 // SkillSeal CLI — attest command
-// Creates an attestation bundle for a skill or plugin
+// Creates a multi-signature attestation bundle for a skill or plugin
 
 import { join, resolve } from "node:path";
 import {
   loadConfig,
+  getConfigKeys,
   createAttestationStatement,
-  signAttestation,
+  signAttestationMulti,
   packageAttestationBundle,
   canonicalJsonStringify,
   getKeyUid,
   isPlugin,
+  getProvider,
 } from "../lib";
-import type { AttestationScope } from "../lib";
+import type { AttestationScope, KeyConfig } from "../lib";
 
 const VALID_SCOPES = new Set([
   "full-review",
@@ -34,7 +36,8 @@ Options:
   --human               Human-readable output instead of JSON
   --help                Show this help message
 
-The reviewer identity (name, github, fingerprint) is read from ~/.skillseal/config.json.
+The reviewer identity (name, github) and signing keys are read from ~/.skillseal/config.json.
+Attestations are signed with ALL configured keys (multi-signature bundle).
 `);
 }
 
@@ -86,31 +89,40 @@ export async function attestCommand(args: string[]): Promise<void> {
     }
   }
 
-  // Load reviewer identity from config
+  // Load reviewer identity and keys from config
   const config = await loadConfig();
-  if (!config.fingerprint || !config.github) {
-    const msg = "~/.skillseal/config.json must contain 'github' and 'fingerprint' fields.";
-    if (humanOutput) {
-      console.error(`Error: ${msg}`);
-      console.error("These identify you as the reviewer.");
-    } else {
-      console.log(JSON.stringify({ error: msg }));
-    }
+  const keys = getConfigKeys(config);
+
+  if (!config.github) {
+    const msg = "~/.skillseal/config.json must contain 'github' field.";
+    if (humanOutput) { console.error(`Error: ${msg}`); } else { console.log(JSON.stringify({ error: msg })); }
     process.exit(1);
   }
 
+  if (keys.length === 0) {
+    const msg = "No signing keys configured in ~/.skillseal/config.json. Add at least one key to the 'keys' array.";
+    if (humanOutput) { console.error(`Error: ${msg}`); } else { console.log(JSON.stringify({ error: msg })); }
+    process.exit(1);
+  }
+
+  // Use the first key's fingerprint as the reviewer fingerprint (for the statement)
+  const reviewerFingerprint = keys[0].fingerprint;
+
   // Get reviewer name: config.author > GPG key UID > github username
   let reviewerName = config.github;
-  if (!config.author && config.fingerprint) {
-    const uid = await getKeyUid(config.fingerprint);
-    if (uid?.name) reviewerName = uid.name;
+  if (!config.author) {
+    const gpgKey = keys.find((k) => k.type === "gpg");
+    if (gpgKey) {
+      const uid = await getKeyUid(gpgKey.fingerprint);
+      if (uid?.name) reviewerName = uid.name;
+    }
   }
   if (config.author) reviewerName = config.author;
 
   const reviewer = {
     name: reviewerName,
     github: config.github,
-    fingerprint: config.fingerprint,
+    fingerprint: reviewerFingerprint,
   };
 
   const isPluginDir = await isPlugin(dir);
@@ -120,6 +132,10 @@ export async function attestCommand(args: string[]): Promise<void> {
     console.log(`Attesting ${packageLabel}: ${dir}`);
     console.log(`  Reviewer: ${reviewer.name} (${reviewer.github})`);
     console.log(`  Scope:    ${scope}`);
+    console.log(`  Keys (${keys.length}):`);
+    for (const key of keys) {
+      console.log(`    ${key.type.toUpperCase()}: ${key.key_path || key.fingerprint}`);
+    }
   }
 
   // Create statement
@@ -140,17 +156,19 @@ export async function attestCommand(args: string[]): Promise<void> {
     if (statement.subject.commit) {
       console.log(`  Commit:   ${statement.subject.commit.slice(0, 12)}...`);
     }
-    console.log("\nSigning attestation...");
+    console.log("\nSigning attestation with all configured keys...");
   }
 
-  // Sign
-  let signature: string;
-  try {
-    signature = await signAttestation(statement, config.fingerprint);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("Inappropriate ioctl") || msg.includes("Device not configured") || msg.includes("No such file or directory") || msg.includes("pinentry")) {
-      const warmCmd = `echo "test" | gpg --sign --local-user ${config.fingerprint} > /dev/null`;
+  // Sign with ALL configured keys (multi-signature)
+  const { signatures, errors: signErrors } = await signAttestationMulti(statement, keys);
+
+  if (signatures.length === 0) {
+    const errorDetail = signErrors.length > 0 ? signErrors.join("; ") : "unknown error";
+
+    // Check for GPG cache cold hint
+    const gpgKey = keys.find((k) => k.type === "gpg");
+    if (gpgKey && signErrors.some((e) => e.includes("ioctl") || e.includes("pinentry") || e.includes("Device not configured"))) {
+      const warmCmd = `echo "test" | gpg --sign --local-user ${gpgKey.fingerprint} > /dev/null`;
       if (humanOutput) {
         console.error("\nGPG passphrase cache is cold. Warm it first:\n");
         console.error(`  ${warmCmd}\n`);
@@ -163,11 +181,21 @@ export async function attestCommand(args: string[]): Promise<void> {
       }
       process.exit(1);
     }
-    throw err;
+
+    const msg = `All signing attempts failed: ${errorDetail}`;
+    if (humanOutput) { console.error(`Error: ${msg}`); } else { console.log(JSON.stringify({ error: msg })); }
+    process.exit(1);
   }
 
-  // Package
-  const bundle = packageAttestationBundle(statement, signature);
+  // Report partial failures as warnings
+  if (signErrors.length > 0 && humanOutput) {
+    for (const err of signErrors) {
+      console.warn(`  Warning: ${err}`);
+    }
+  }
+
+  // Package bundle with all successful signatures
+  const bundle = packageAttestationBundle(statement, signatures);
 
   // Determine output path
   if (!outputPath) {
@@ -183,6 +211,7 @@ export async function attestCommand(args: string[]): Promise<void> {
   // Output
   if (humanOutput) {
     console.log(`\nAttestation bundle written to: ${outputPath}`);
+    console.log(`  Signatures: ${signatures.map((s) => s.type.toUpperCase()).join(", ")}`);
     console.log("\nTo verify:");
     console.log(`  skillseal verify ${dir} --attestation ${outputPath}`);
   } else {
@@ -193,6 +222,7 @@ export async function attestCommand(args: string[]): Promise<void> {
       version: statement.subject.version,
       reviewer: reviewer,
       scope,
+      signatures: signatures.map((s) => ({ type: s.type })),
       digests: statement.subject.digests,
       commit: statement.subject.commit || null,
     }, null, 2));

@@ -3,11 +3,11 @@
 export { generateManifest, writeManifest, hashManifest, verifyManifest, isPlugin } from "./manifest";
 export type { ManifestData } from "./manifest";
 
-export { signSkill, getSigningFingerprint, getKeyUid, isCacheWarm, clearCache, signFile, verifyFileSignature } from "./sign";
+export { signSkill, signPlugin, getKeyUid } from "./sign";
 export type { SignResult } from "./sign";
 
-export { fetchGitHubKey, verifySkill, verifyPlugin } from "./verify";
-export type { TrustJson, VerifyResult, VerifyOptions, PluginVerifyResult } from "./verify";
+export { verifySkill, verifyPlugin } from "./verify";
+export type { TrustJson, TrustJsonKey, VerifyResult, VerifyOptions, PluginVerifyResult } from "./verify";
 
 export {
   loadTrustStore,
@@ -16,15 +16,27 @@ export {
   isReviewerTrusted,
   evaluatePolicy,
 } from "./trust";
-export type { TrustStore, TrustedEntity, PolicyAction, PolicyScenario } from "./trust";
+export type { TrustStore, TrustedEntity, TrustedEntityKey, PolicyAction, PolicyScenario } from "./trust";
 
-export { loadConfig } from "./config";
-export type { SkillSealConfig } from "./config";
+export { loadConfig, getConfigKeys, getConfigKeysByType } from "./config";
+export type { SkillSealConfig, KeyConfig } from "./config";
+
+export {
+  registerProvider,
+  getProvider,
+  getAllProviders,
+  getProviderTypes,
+  detectProvider,
+  fetchGitHubSSHSigningKeys,
+  fetchGitHubGPGKey,
+  validateSSHKeyStrength,
+} from "./providers";
+export type { SigningProvider, GitHubSSHSigningKey, SSHKeyStrength } from "./providers";
 
 export {
   canonicalJsonStringify,
   createAttestationStatement,
-  signAttestation,
+  signAttestationMulti,
   packageAttestationBundle,
   parseAttestationBundle,
   verifyAttestationBundle,
@@ -38,6 +50,7 @@ export type {
   AttestationSubject,
   AttestationReviewer,
   AttestationStatement,
+  AttestationSignature,
   AttestationBundle,
   AttestationResult,
   DiscoverOptions,

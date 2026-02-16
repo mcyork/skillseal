@@ -1,21 +1,28 @@
 // SkillSeal — signature verification
-// Fetches key from GitHub, imports to temp keyring, verifies SKILL.sig against SKILL.md
+// Reads TRUST.json, fetches keys from GitHub, verifies SIGNATURES/ against signed artifacts
 
 import { timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
-import { chmod, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir } from "node:fs/promises";
 import { verifyManifest, hashManifest, isPlugin } from "./manifest";
 import type { AttestationResult, AttestationBundle } from "./attest";
 import { discoverLocalAttestations, verifyAttestationBundle } from "./attest";
-
-const GITHUB_USERNAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
-const MAX_KEY_SIZE = 1024 * 1024; // 1 MB
-const FETCH_TIMEOUT_MS = 30_000;
+import { getProvider, detectProvider } from "./providers";
+import type { KeyConfig } from "./config";
 
 function safeCompare(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+// ---------------------------------------------------------------------------
+// Types — v0.2.0 schema
+// ---------------------------------------------------------------------------
+
+export interface TrustJsonKey {
+  type: string;
+  fingerprint: string;
+  key_url: string;
 }
 
 export interface TrustJson {
@@ -24,8 +31,7 @@ export interface TrustJson {
     name: string;
     email?: string;
     github: string;
-    fingerprint: string;
-    key_url: string;
+    keys: TrustJsonKey[];
   };
   attestations?: Array<{
     reviewer: string;
@@ -47,6 +53,10 @@ export interface VerifyResult {
   attestations: AttestationResult[];
 }
 
+// ---------------------------------------------------------------------------
+// Frontmatter parsing
+// ---------------------------------------------------------------------------
+
 interface FrontmatterData {
   manifest_hash?: string;
   [key: string]: unknown;
@@ -64,10 +74,8 @@ function parseFrontmatter(content: string): FrontmatterData | null {
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
     let value: string | boolean = line.slice(colonIdx + 1).trim();
-    // Handle simple types
     if (value === "true") value = true as unknown as string;
     else if (value === "false") value = false as unknown as string;
-    // Strip quotes
     else if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
@@ -77,50 +85,39 @@ function parseFrontmatter(content: string): FrontmatterData | null {
   return result;
 }
 
-export async function fetchGitHubKey(username: string): Promise<string> {
-  if (!GITHUB_USERNAME_RE.test(username)) {
-    throw new Error(`Invalid GitHub username: ${username}`);
-  }
+// ---------------------------------------------------------------------------
+// SIGNATURES/ directory reading
+// ---------------------------------------------------------------------------
 
-  const url = `https://github.com/${username}.gpg`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-  let response: Response;
+async function readSignaturesDir(skillDir: string): Promise<Array<{ type: string; sigPath: string }>> {
+  const sigDir = join(skillDir, "SIGNATURES");
   try {
-    response = await fetch(url, { signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
+    const entries = await readdir(sigDir, { withFileTypes: true });
+    const sigs: Array<{ type: string; sigPath: string }> = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".sig")) continue;
+      // File naming: gpg.sig, ssh.sig, <type>.sig
+      const type = entry.name.replace(/\.sig$/, "");
+      sigs.push({ type, sigPath: join(sigDir, entry.name) });
+    }
+    return sigs;
+  } catch {
+    return [];
   }
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch GPG key from ${url}: ${response.status} ${response.statusText}`);
-  }
-
-  const contentLength = response.headers.get("content-length");
-  if (contentLength && parseInt(contentLength, 10) > MAX_KEY_SIZE) {
-    throw new Error(`GPG key response too large: ${contentLength} bytes (max ${MAX_KEY_SIZE})`);
-  }
-
-  const keyData = await response.text();
-
-  if (keyData.length > MAX_KEY_SIZE) {
-    throw new Error(`GPG key data too large: ${keyData.length} bytes (max ${MAX_KEY_SIZE})`);
-  }
-
-  if (!keyData.includes("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
-    throw new Error("Response from GitHub is not a valid PGP public key block");
-  }
-
-  return keyData;
 }
+
+// ---------------------------------------------------------------------------
+// Verify options
+// ---------------------------------------------------------------------------
 
 export interface VerifyOptions {
-  /** Explicit attestation bundles to verify (from --attestation flag or fetched URLs) */
   explicitAttestations?: AttestationBundle[];
-  /** Whether to scan ATTESTATIONS/ directory (default: true) */
   checkLocalAttestations?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Skill verification
+// ---------------------------------------------------------------------------
 
 export async function verifySkill(
   skillDir: string,
@@ -132,13 +129,12 @@ export async function verifySkill(
   let manifestValid = false;
   const attestationResults: AttestationResult[] = [];
 
-  // 1. Read TRUST.json (optional for unsigned skills)
+  // 1. Read TRUST.json
   const trustPath = join(skillDir, "TRUST.json");
   const trustFile = Bun.file(trustPath);
   const hasTrustJson = await trustFile.exists();
 
   if (!hasTrustJson) {
-    // Unsigned skill — still check attestations if provided
     const hasAttestations =
       (options.explicitAttestations && options.explicitAttestations.length > 0) ||
       options.checkLocalAttestations !== false;
@@ -147,7 +143,6 @@ export async function verifySkill(
       return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json not found (unsigned skill, no attestations provided)"], warnings, attestations: [] };
     }
 
-    // For unsigned skills, skip signature/manifest checks and go straight to attestations
     warnings.push("Unsigned skill — no author signature or manifest. Trust relies on attestations only.");
 
     const bundlesToVerify: Array<{ bundle: AttestationBundle; source: AttestationResult["source"] }> = [];
@@ -184,113 +179,70 @@ export async function verifySkill(
     return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json is not valid JSON"], warnings, attestations: [] };
   }
 
-  // Validate required TRUST.json fields
   if (!trust.author || typeof trust.author !== "object") {
     return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing author object"], warnings, attestations: [] };
   }
   if (!trust.author.github || typeof trust.author.github !== "string") {
     return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing valid author.github field"], warnings, attestations: [] };
   }
-  if (!trust.author.fingerprint || typeof trust.author.fingerprint !== "string") {
-    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing valid author.fingerprint field"], warnings, attestations: [] };
+  if (!trust.author.keys || !Array.isArray(trust.author.keys) || trust.author.keys.length === 0) {
+    return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing valid author.keys array"], warnings, attestations: [] };
   }
 
-  // 2. Check SKILL.md and SKILL.sig exist
+  // 2. Check SKILL.md exists
   const skillMdPath = join(skillDir, "SKILL.md");
-  const sigPath = join(skillDir, "SKILL.sig");
-
   if (!(await Bun.file(skillMdPath).exists())) {
     errors.push("SKILL.md not found");
     return { valid: false, signatureValid, manifestValid, author: trust.author, errors, warnings, attestations: [] };
   }
-  if (!(await Bun.file(sigPath).exists())) {
-    errors.push("SKILL.sig not found");
+
+  // 3. Read SIGNATURES/ directory
+  const signatures = await readSignaturesDir(skillDir);
+  if (signatures.length === 0) {
+    errors.push("SIGNATURES/ directory is empty or missing — no signatures found");
     return { valid: false, signatureValid, manifestValid, author: trust.author, errors, warnings, attestations: [] };
   }
 
-  // 3. Fetch key from GitHub and import into temp keyring
-  let tmpGpgHome: string | null = null;
-  try {
-    const keyData = await fetchGitHubKey(trust.author.github);
-
-    tmpGpgHome = await mkdtemp(join(tmpdir(), "skillseal-"));
-    await chmod(tmpGpgHome, 0o700);
-
-    // Import key into temp keyring
-    const importProc = Bun.spawn(
-      ["gpg", "--homedir", tmpGpgHome, "--batch", "--import"],
-      {
-        stdin: new TextEncoder().encode(keyData),
-        stdout: "pipe",
-        stderr: "pipe",
-      }
-    );
-    await importProc.exited;
-
-    // 4. Verify the key fingerprint matches
-    const listProc = Bun.spawn(
-      ["gpg", "--homedir", tmpGpgHome, "--list-keys", "--with-colons"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-      }
-    );
-    await listProc.exited;
-
-    const listOutput = await new Response(listProc.stdout).text();
-    const fingerprints = listOutput
-      .split("\n")
-      .filter((l) => l.startsWith("fpr:"))
-      .map((l) => l.split(":")[9]);
-
-    const expectedFp = trust.author.fingerprint.toUpperCase().replace(/\s/g, "");
-    const foundKey = fingerprints.some((fp) => {
-      if (!fp) return false;
-      const normalized = fp.toUpperCase();
-      return safeCompare(normalized, expectedFp);
-    });
-
-    if (!foundKey) {
-      errors.push(
-        `Key fingerprint mismatch: expected ${expectedFp} but not found in keys from github.com/${trust.author.github}.gpg`
-      );
-    } else {
-      // 5. Verify signature
-      const verifyProc = Bun.spawn(
-        ["gpg", "--homedir", tmpGpgHome, "--batch", "--verify", "--", sigPath, skillMdPath],
-        {
-          stdout: "pipe",
-          stderr: "pipe",
-        }
-      );
-
-      const verifyExit = await verifyProc.exited;
-      const verifyStderr = await new Response(verifyProc.stderr).text();
-
-      if (verifyExit === 0) {
-        // Confirm the signature was made by the expected key
-        if (verifyStderr.toUpperCase().includes(expectedFp)) {
-          signatureValid = true;
-        } else {
-          // Signature is valid but we can't confirm the fingerprint from stderr
-          // This can happen with subkeys — still treat as valid if gpg says OK
-          signatureValid = true;
-          warnings.push("Signature valid but fingerprint not directly confirmed in GPG output (may be a subkey)");
-        }
-      } else {
-        errors.push(`Signature verification failed: ${verifyStderr.trim()}`);
-      }
+  // 4. Try each signature — need ONE valid match against a declared key
+  for (const sig of signatures) {
+    const provider = getProvider(sig.type);
+    if (!provider) {
+      warnings.push(`Unknown signature type: ${sig.type} (no registered provider)`);
+      continue;
     }
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    errors.push(`Key fetch/import error: ${message}`);
-  } finally {
-    if (tmpGpgHome) {
-      await rm(tmpGpgHome, { recursive: true, force: true });
+
+    // Find matching key in TRUST.json
+    const matchingKey = trust.author.keys.find((k) => k.type === sig.type);
+    if (!matchingKey) {
+      warnings.push(`Signature type ${sig.type} has no matching key in TRUST.json`);
+      continue;
+    }
+
+    const result = await provider.verifyFile(
+      skillMdPath,
+      sig.sigPath,
+      trust.author.github,
+      matchingKey.fingerprint,
+    );
+
+    warnings.push(...result.warnings);
+
+    if (result.valid) {
+      signatureValid = true;
+      break; // One valid signature is sufficient
+    } else {
+      // Collect errors but keep trying other signatures
+      for (const err of result.errors) {
+        warnings.push(`${sig.type} signature: ${err}`);
+      }
     }
   }
 
-  // 6. Verify manifest integrity
+  if (!signatureValid) {
+    errors.push("No valid signature found in SIGNATURES/ directory");
+  }
+
+  // 5. Verify manifest integrity
   const manifestPath = join(skillDir, "MANIFEST.json");
   if (await Bun.file(manifestPath).exists()) {
     const manifestResult = await verifyManifest(skillDir);
@@ -302,7 +254,6 @@ export async function verifySkill(
       manifestValid = true;
     }
 
-    // Check manifest_hash in SKILL.md frontmatter
     const skillMdContent = await Bun.file(skillMdPath).text();
     const frontmatter = parseFrontmatter(skillMdContent);
     if (frontmatter?.manifest_hash) {
@@ -319,30 +270,18 @@ export async function verifySkill(
     warnings.push("MANIFEST.json not found — manifest integrity not checked");
   }
 
-  // 7. Verify attestations
+  // 6. Verify attestations
   const bundlesToVerify: Array<{ bundle: AttestationBundle; source: AttestationResult["source"] }> = [];
-
-  // Scan local ATTESTATIONS/ directory
   if (options.checkLocalAttestations !== false) {
     const localBundles = await discoverLocalAttestations(skillDir);
-    for (const b of localBundles) {
-      bundlesToVerify.push({ bundle: b, source: "local" });
-    }
+    for (const b of localBundles) bundlesToVerify.push({ bundle: b, source: "local" });
   }
-
-  // Add explicit attestations
   if (options.explicitAttestations) {
-    for (const b of options.explicitAttestations) {
-      bundlesToVerify.push({ bundle: b, source: "explicit" });
-    }
+    for (const b of options.explicitAttestations) bundlesToVerify.push({ bundle: b, source: "explicit" });
   }
-
-  // Verify all attestation bundles in parallel
   if (bundlesToVerify.length > 0) {
     const results = await Promise.all(
-      bundlesToVerify.map(({ bundle, source }) =>
-        verifyAttestationBundle(bundle, skillDir, source)
-      )
+      bundlesToVerify.map(({ bundle, source }) => verifyAttestationBundle(bundle, skillDir, source))
     );
     attestationResults.push(...results);
   }
@@ -358,7 +297,9 @@ export async function verifySkill(
   };
 }
 
-// ── Plugin verification ────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Plugin verification
+// ---------------------------------------------------------------------------
 
 export interface PluginVerifyResult extends VerifyResult {
   pluginName?: string;
@@ -385,7 +326,7 @@ export async function verifyPlugin(
     };
   }
 
-  let pluginData: { name?: string; version?: string; signed?: boolean; author_fingerprint?: string; manifest_hash?: string; [key: string]: unknown };
+  let pluginData: { name?: string; version?: string; signed?: boolean; manifest_hash?: string; [key: string]: unknown };
   try {
     pluginData = await pluginJsonFile.json();
   } catch {
@@ -420,89 +361,59 @@ export async function verifyPlugin(
     };
   }
 
-  if (!trust.author?.github || !trust.author?.fingerprint) {
+  if (!trust.author?.github || !trust.author?.keys || trust.author.keys.length === 0) {
     return {
       valid: false, signatureValid: false, manifestValid: false,
-      errors: ["TRUST.json missing valid author.github or author.fingerprint"], warnings, attestations: [],
+      errors: ["TRUST.json missing valid author.github or author.keys"], warnings, attestations: [],
       pluginName, pluginVersion,
     };
   }
 
-  // 3. Check PLUGIN.sig exists
-  const sigPath = join(pluginDir, "PLUGIN.sig");
-  if (!(await Bun.file(sigPath).exists())) {
-    errors.push("PLUGIN.sig not found");
+  // 3. Read SIGNATURES/ directory
+  const signatures = await readSignaturesDir(pluginDir);
+  if (signatures.length === 0) {
+    errors.push("SIGNATURES/ directory is empty or missing — no signatures found");
     return {
       valid: false, signatureValid, manifestValid, author: trust.author, errors, warnings, attestations: [],
       pluginName, pluginVersion,
     };
   }
 
-  // 4. Fetch key from GitHub and verify signature
-  let tmpGpgHome: string | null = null;
-  try {
-    const keyData = await fetchGitHubKey(trust.author.github);
+  // 4. Try each signature — the signed artifact is plugin.json
+  for (const sig of signatures) {
+    const provider = getProvider(sig.type);
+    if (!provider) {
+      warnings.push(`Unknown signature type: ${sig.type} (no registered provider)`);
+      continue;
+    }
 
-    tmpGpgHome = await mkdtemp(join(tmpdir(), "skillseal-"));
-    await chmod(tmpGpgHome, 0o700);
+    const matchingKey = trust.author.keys.find((k) => k.type === sig.type);
+    if (!matchingKey) {
+      warnings.push(`Signature type ${sig.type} has no matching key in TRUST.json`);
+      continue;
+    }
 
-    const importProc = Bun.spawn(
-      ["gpg", "--homedir", tmpGpgHome, "--batch", "--import"],
-      { stdin: new TextEncoder().encode(keyData), stdout: "pipe", stderr: "pipe" }
+    const result = await provider.verifyFile(
+      pluginJsonPath,
+      sig.sigPath,
+      trust.author.github,
+      matchingKey.fingerprint,
     );
-    await importProc.exited;
 
-    // Verify key fingerprint matches
-    const listProc = Bun.spawn(
-      ["gpg", "--homedir", tmpGpgHome, "--list-keys", "--with-colons"],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-    await listProc.exited;
+    warnings.push(...result.warnings);
 
-    const listOutput = await new Response(listProc.stdout).text();
-    const fingerprints = listOutput
-      .split("\n")
-      .filter((l) => l.startsWith("fpr:"))
-      .map((l) => l.split(":")[9]);
-
-    const expectedFp = trust.author.fingerprint.toUpperCase().replace(/\s/g, "");
-    const foundKey = fingerprints.some((fp) => {
-      if (!fp) return false;
-      return safeCompare(fp.toUpperCase(), expectedFp);
-    });
-
-    if (!foundKey) {
-      errors.push(
-        `Key fingerprint mismatch: expected ${expectedFp} but not found in keys from github.com/${trust.author.github}.gpg`
-      );
+    if (result.valid) {
+      signatureValid = true;
+      break;
     } else {
-      // Verify PLUGIN.sig against plugin.json
-      const verifyProc = Bun.spawn(
-        ["gpg", "--homedir", tmpGpgHome, "--batch", "--verify", "--", sigPath, pluginJsonPath],
-        { stdout: "pipe", stderr: "pipe" }
-      );
-
-      const verifyExit = await verifyProc.exited;
-      const verifyStderr = await new Response(verifyProc.stderr).text();
-
-      if (verifyExit === 0) {
-        if (verifyStderr.toUpperCase().includes(expectedFp)) {
-          signatureValid = true;
-        } else {
-          signatureValid = true;
-          warnings.push("Signature valid but fingerprint not directly confirmed in GPG output (may be a subkey)");
-        }
-      } else {
-        errors.push(`Signature verification failed: ${verifyStderr.trim()}`);
+      for (const err of result.errors) {
+        warnings.push(`${sig.type} signature: ${err}`);
       }
     }
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    errors.push(`Key fetch/import error: ${message}`);
-  } finally {
-    if (tmpGpgHome) {
-      await rm(tmpGpgHome, { recursive: true, force: true });
-    }
+  }
+
+  if (!signatureValid) {
+    errors.push("No valid signature found in SIGNATURES/ directory");
   }
 
   // 5. Verify manifest integrity (plugin mode)
@@ -517,7 +428,6 @@ export async function verifyPlugin(
       manifestValid = true;
     }
 
-    // Check manifest_hash in plugin.json
     if (pluginData.manifest_hash) {
       const currentHash = await hashManifest(pluginDir);
       if (!safeCompare(String(pluginData.manifest_hash), currentHash)) {

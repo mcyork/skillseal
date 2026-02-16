@@ -1,11 +1,21 @@
 {
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "author": {
-    "name": "Ian McCutcheon (SkillSeal)",
-    "email": "ian@esoup.net",
+    "name": "Ian McCutcheon",
+    "email": "",
     "github": "mcyork",
-    "fingerprint": "7097CE1EF54E0808FD3855427ED9682FF64286D0",
-    "key_url": "https://github.com/mcyork.gpg"
+    "keys": [
+      {
+        "type": "gpg",
+        "fingerprint": "7097CE1EF54E0808FD3855427ED9682FF64286D0",
+        "key_url": "https://github.com/mcyork.gpg"
+      },
+      {
+        "type": "ssh",
+        "fingerprint": "SHA256:vZcivMOtxMdRjvcyGpNSjECXhb/wspMSsHO/bfPXBmQ",
+        "key_url": "https://api.github.com/users/mcyork/ssh_signing_keys"
+      }
+    ]
   },
   "attestations": []
 }

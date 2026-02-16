@@ -10,25 +10,51 @@ LLM agents install and execute skills and plugins — Markdown files, commands, 
 
 SkillSeal provides a lightweight signing framework for skill packages and plugins:
 
-- **Provenance** — GPG signatures tie a skill to a verified author identity
+- **Provenance** — Cryptographic signatures (GPG and SSH) tie a skill to a verified author identity
+- **Multi-key signing** — Authors sign with multiple keys simultaneously (GPG + SSH), so verifiers can check with whichever key type they prefer
 - **Integrity** — A manifest of SHA-256 hashes ensures no file has been altered
 - **Trust policy** — A local trust store lets agents and users define who they trust and at what level
-- **Multi-attestation** — Reviewers and automated scanners can add their own signatures, building a web of trust
-- **Key discovery** — Author public keys are resolved via GitHub (`github.com/{username}.gpg`), requiring no custom infrastructure
+- **Multi-attestation** — Reviewers and automated scanners can add their own multi-key signatures, building a web of trust
+- **Key discovery** — Author public keys are resolved via GitHub (`github.com/{username}.gpg` for GPG, `api.github.com/users/{username}/ssh_signing_keys` for SSH), requiring no custom infrastructure
+- **Pluggable providers** — A provider architecture allows new signing methods to be added without modifying core code
 
 ## Components
 
 | Component | Purpose |
 |-----------|---------|
-| `skillseal sign <dir>` | Sign a skill or plugin (auto-detected) |
-| `skillseal verify <dir>` | Verify a skill or plugin (auto-detected) |
+| `skillseal sign <dir>` | Sign a skill or plugin with all configured keys |
+| `skillseal verify <dir>` | Verify a skill or plugin (one valid signature suffices) |
 | `skillseal sign-all <dir>` | Sign all skills and plugins in a directory |
-| `skillseal attest <dir>` | Create an attestation bundle for a skill |
+| `skillseal attest <dir>` | Create a multi-key attestation bundle for a skill |
 | `skillseal init <dir>` | Scaffold a new skill package |
-| `skillseal trust <cmd>` | Manage trust store (add, remove, list) |
+| `skillseal trust <cmd>` | Manage trust store (add, remove, add-key, remove-key, list) |
 | `skillseal-sign/SKILL.md` | Skill that teaches LLMs how to sign |
 | `skillseal-verify/SKILL.md` | Skill that teaches LLMs how to verify |
 | `hooks/skill-verify.ts` | PreToolUse hook for Claude Code enforcement |
+
+## Configuration
+
+SkillSeal uses `~/.skillseal/config.json` for signing identity and keys:
+
+```json
+{
+  "github": "mcyork",
+  "author": "Ian McCutcheon",
+  "keys": [
+    {
+      "type": "gpg",
+      "fingerprint": "7097CE1EF54E0808FD3855427ED9682FF64286D0"
+    },
+    {
+      "type": "ssh",
+      "fingerprint": "SHA256:vZcivMOtxMdRjvcyGpNSjECXhb/wspMSsHO/bfPXBmQ",
+      "key_path": "/path/to/.ssh/skillseal_ed25519"
+    }
+  ]
+}
+```
+
+Each key in the `keys` array becomes a signing provider. When you run `skillseal sign`, the tool signs with **all** configured keys simultaneously, producing one signature per provider in the `SIGNATURES/` directory.
 
 ## Bootstrap Verification
 
@@ -45,18 +71,22 @@ curl -sL https://github.com/mcyork.gpg | gpg --import
 # Expected: 7097 CE1E F54E 0808 FD38 5542 7ED9 682F F642 86D0
 gpg --fingerprint ian@esoup.net
 
-# Verify the verification skill is authentic
-gpg --verify skillseal-verify/SKILL.sig skillseal-verify/SKILL.md
+# Verify the verification skill is authentic (GPG signature)
+gpg --verify skillseal-verify/SIGNATURES/gpg.sig skillseal-verify/SKILL.md
 
 # Verify the signing skill is authentic
-gpg --verify skillseal-sign/SKILL.sig skillseal-sign/SKILL.md
+gpg --verify skillseal-sign/SIGNATURES/gpg.sig skillseal-sign/SKILL.md
 ```
 
 If GPG reports `Good signature from "Ian McCutcheon (SkillSeal) <ian@esoup.net>"`, the package is authentic and unmodified. You can now trust the tool to verify everything else.
 
+Both demo skills are also signed with SSH (Ed25519). The SSH signatures are in `SIGNATURES/ssh.sig` and can be verified using `ssh-keygen -Y verify`.
+
 All commits in this repository are GPG-signed with the same key. On GitHub, every commit should display a **Verified** badge. If you see unverified commits, investigate before proceeding.
 
-**Author fingerprint:** `7097CE1EF54E0808FD3855427ED9682FF64286D0`
+**Author keys:**
+- GPG: `7097CE1EF54E0808FD3855427ED9682FF64286D0`
+- SSH: `SHA256:vZcivMOtxMdRjvcyGpNSjECXhb/wspMSsHO/bfPXBmQ` (Ed25519)
 
 ## Quick Start
 
@@ -64,13 +94,13 @@ All commits in this repository are GPG-signed with the same key. On GitHub, ever
 # Install (after bootstrap verification above)
 cd skillseal && bun install
 
-# Sign a skill
+# Sign a skill (signs with all configured keys)
 bun run skillseal sign /path/to/skill-directory
 
 # Sign a plugin (auto-detected via .claude-plugin/plugin.json)
 bun run skillseal sign /path/to/plugin-directory
 
-# Verify a skill or plugin
+# Verify a skill or plugin (one valid signature suffices)
 bun run skillseal verify /path/to/skill-or-plugin-directory
 
 # Scaffold a new skill package
@@ -79,6 +109,21 @@ bun run skillseal init /path/to/new-skill
 
 ## How It Works
 
+### Multi-Key Signing
+
+SkillSeal v0.2.0 introduces a **pluggable provider architecture** for signing. Authors configure multiple keys in `~/.skillseal/config.json`, and every signing operation produces one signature per key type in a `SIGNATURES/` directory:
+
+```
+SIGNATURES/
+├── gpg.sig    # Detached GPG signature
+└── ssh.sig    # SSH signature (ssh-keygen -Y sign)
+```
+
+Verification requires only **one valid signature** to pass. This means:
+- A verifier with GPG but not SSH can still verify
+- A verifier with SSH but not GPG can still verify
+- Future key types can be added without breaking existing verification
+
 ### Skills
 
 A signed skill package contains:
@@ -86,9 +131,11 @@ A signed skill package contains:
 ```
 my-skill/
 ├── SKILL.md          # The skill instructions (signed artifact)
-├── SKILL.sig         # Detached GPG signature
+├── SIGNATURES/       # One signature per key type
+│   ├── gpg.sig       # Detached GPG signature
+│   └── ssh.sig       # SSH signature
 ├── MANIFEST.json     # SHA-256 hashes of all package files
-├── TRUST.json        # Author identity and attestation records
+├── TRUST.json        # Author identity with keys[] array
 └── ATTESTATIONS/     # Reviewer and scanner signatures
 ```
 
@@ -105,25 +152,55 @@ my-plugin/
 ├── agents/           # Agent definitions (optional)
 ├── hooks/            # Hook scripts (optional)
 ├── .mcp.json         # MCP server config (optional)
-├── PLUGIN.sig        # Detached GPG signature of plugin.json
+├── SIGNATURES/       # One signature per key type
+│   ├── gpg.sig       # Detached GPG signature of plugin.json
+│   └── ssh.sig       # SSH signature of plugin.json
 ├── MANIFEST.json     # SHA-256 hashes of all plugin files
-├── TRUST.json        # Author identity and attestation records
+├── TRUST.json        # Author identity with keys[] array
 └── README.md
 ```
 
-Plugins are the distribution unit — one signature covers all skills, commands, hooks, agents, and MCP configs within the plugin. The `sign` and `verify` commands auto-detect whether a directory is a plugin (has `.claude-plugin/plugin.json`) or a skill (has `SKILL.md`).
+### TRUST.json
 
-Verification fetches the author's public key from GitHub, validates the signature, checks manifest integrity, and applies trust policy from the local store at `~/.skillseal/trust-store.json`.
+The trust metadata file records the author's identity and all signing keys:
 
-## Security: GPG Agent and Passphrase Caching
+```json
+{
+  "schema_version": "0.2.0",
+  "author": {
+    "name": "Ian McCutcheon",
+    "email": "",
+    "github": "mcyork",
+    "keys": [
+      {
+        "type": "gpg",
+        "fingerprint": "7097CE1EF54E0808FD3855427ED9682FF64286D0",
+        "key_url": "https://github.com/mcyork.gpg"
+      },
+      {
+        "type": "ssh",
+        "fingerprint": "SHA256:vZcivMOtxMdRjvcyGpNSjECXhb/wspMSsHO/bfPXBmQ",
+        "key_url": "https://api.github.com/users/mcyork/ssh_signing_keys"
+      }
+    ]
+  },
+  "attestations": []
+}
+```
 
-SkillSeal uses GPG for all signing operations. GPG delegates passphrase handling to `gpg-agent`, which **caches passphrases by default**. This has a direct security implication:
+Plugins are the distribution unit — one set of signatures covers all skills, commands, hooks, agents, and MCP configs within the plugin. The `sign` and `verify` commands auto-detect whether a directory is a plugin (has `.claude-plugin/plugin.json`) or a skill (has `SKILL.md`).
 
-**If your passphrase is cached, an LLM agent can sign skills without prompting you for approval.**
+Verification fetches the author's public key from GitHub, validates the signature (any one valid signature suffices), checks manifest integrity, and applies trust policy from the local store at `~/.skillseal/trust-store.json`.
 
-After you enter your GPG passphrase (for any reason — signing, key generation, etc.), `gpg-agent` holds it in memory for a configurable period. Any subsequent signing operation within that window succeeds silently. This means an LLM agent running `skillseal sign` will not be stopped by a passphrase prompt if the cache is warm.
+## Security: Signing Key Cache and Passphrase
 
-### Default cache behavior
+SkillSeal uses GPG and SSH for signing operations. Both can cache credentials:
+
+**GPG** delegates passphrase handling to `gpg-agent`, which **caches passphrases by default**. If your passphrase is cached, an LLM agent can sign skills without prompting you for approval.
+
+**SSH** keys may be loaded in `ssh-agent`. If the key is loaded, signing is silent.
+
+### Default GPG cache behavior
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
@@ -132,7 +209,7 @@ After you enter your GPG passphrase (for any reason — signing, key generation,
 
 ### Hardening options
 
-To require a passphrase prompt on every signing operation, add this to `~/.gnupg/gpg-agent.conf`:
+To require a passphrase prompt on every GPG signing operation, add this to `~/.gnupg/gpg-agent.conf`:
 
 ```
 ignore-cache-for-signing
@@ -144,28 +221,32 @@ Then reload the agent:
 gpgconf --kill gpg-agent
 ```
 
-This forces GPG to prompt for your passphrase every time `skillseal sign` runs, even if the passphrase is otherwise cached. The LLM agent will be unable to sign without your explicit interaction.
+For SSH, remove the key from the agent:
+
+```bash
+ssh-add -d /path/to/.ssh/skillseal_ed25519
+```
 
 ### Recommendations
 
 - **Personal use with trusted LLM agents:** Default caching is reasonable. Your passphrase protects the key at rest; the cache window is limited.
-- **Shared machines or untrusted agents:** Enable `ignore-cache-for-signing`. Every signature requires your explicit passphrase entry.
-- **CI/CD or automated signing:** Use a dedicated signing key with no passphrase, stored in a secured environment with restricted access.
+- **Shared machines or untrusted agents:** Enable `ignore-cache-for-signing` for GPG. Remove SSH keys from agent.
+- **CI/CD or automated signing:** Use dedicated signing keys with no passphrase, stored in a secured environment with restricted access.
 
 ## Hardening the Trust Store
 
 The trust store (`~/.skillseal/trust-store.json`) is the root of all trust decisions. If a compromised LLM agent can modify it — via prompt injection, malicious skill instructions, or social engineering — the entire signing and verification system is bypassed. The attacker adds their key, signs a malicious skill, and it passes verification.
 
-SkillSeal already GPG-signs the trust store, but that only prevents direct file edits — if the GPG cache is warm, the LLM can run `skillseal trust add` and the signing happens automatically.
+SkillSeal signs the trust store with all configured keys (stored in `~/.skillseal/trust-store.signatures/`), but that only prevents direct file edits — if the signing key caches are warm, the LLM can run `skillseal trust add` and the signing happens automatically.
 
 ### Threat model
 
 A malicious skill's instructions tell the LLM agent to:
 1. Run `skillseal trust add attacker-github ATTACKER_FINGERPRINT` (adds attacker to trust store)
-2. The trust store is re-signed automatically (GPG cache is warm)
+2. The trust store is re-signed automatically (key caches are warm)
 3. Install and run a malicious skill signed by the attacker (now passes verification)
 
-The attack works because the LLM agent runs as the user and has the same file/GPG permissions.
+The attack works because the LLM agent runs as the user and has the same file/key permissions.
 
 ### Layer 1: GPG passphrase gating (recommended minimum)
 
@@ -181,35 +262,39 @@ After configuring your trust store, lock the files:
 
 **macOS:**
 ```bash
-# Lock trust store and its signature
-chflags uchg ~/.skillseal/trust-store.json ~/.skillseal/trust-store.json.sig
+# Lock trust store and its signatures
+chflags uchg ~/.skillseal/trust-store.json
+chflags uchg ~/.skillseal/trust-store.signatures/*
 
 # To unlock when you need to make changes:
-chflags nouchg ~/.skillseal/trust-store.json ~/.skillseal/trust-store.json.sig
+chflags nouchg ~/.skillseal/trust-store.json
+chflags nouchg ~/.skillseal/trust-store.signatures/*
 ```
 
 **Linux:**
 ```bash
 # Lock (requires sudo)
-sudo chattr +i ~/.skillseal/trust-store.json ~/.skillseal/trust-store.json.sig
+sudo chattr +i ~/.skillseal/trust-store.json
+sudo chattr +i ~/.skillseal/trust-store.signatures/*
 
 # To unlock:
-sudo chattr -i ~/.skillseal/trust-store.json ~/.skillseal/trust-store.json.sig
+sudo chattr -i ~/.skillseal/trust-store.json
+sudo chattr -i ~/.skillseal/trust-store.signatures/*
 ```
 
-**Protects against:** Any write to the trust store files, regardless of GPG state. The LLM agent would need to know to run `chflags nouchg` first, and a Bash PreToolUse hook can block that (see below).
+**Protects against:** Any write to the trust store files, regardless of key cache state. The LLM agent would need to know to run `chflags nouchg` first, and a Bash PreToolUse hook can block that (see below).
 
 ### Layer 3: Root ownership (maximum)
 
 Transfer ownership of trust store files to root:
 
 ```bash
-sudo chown root:wheel ~/.skillseal/trust-store.json ~/.skillseal/trust-store.json.sig
+sudo chown root:wheel ~/.skillseal/trust-store.json ~/.skillseal/trust-store.signatures/*
 
 # To modify, temporarily take ownership back:
-sudo chown $(whoami) ~/.skillseal/trust-store.json ~/.skillseal/trust-store.json.sig
+sudo chown $(whoami) ~/.skillseal/trust-store.json ~/.skillseal/trust-store.signatures/*
 # ... make changes ...
-sudo chown root:wheel ~/.skillseal/trust-store.json ~/.skillseal/trust-store.json.sig
+sudo chown root:wheel ~/.skillseal/trust-store.json ~/.skillseal/trust-store.signatures/*
 ```
 
 **Protects against:** All user-level modification attempts. The LLM agent cannot `sudo`.
@@ -246,7 +331,7 @@ To check that your trust store hasn't been tampered with:
 
 ```bash
 # Verify the GPG signature on the trust store
-gpg --verify ~/.skillseal/trust-store.json.sig ~/.skillseal/trust-store.json
+gpg --verify ~/.skillseal/trust-store.signatures/gpg.sig ~/.skillseal/trust-store.json
 
 # Check file flags (macOS)
 ls -lO ~/.skillseal/trust-store.json
@@ -281,7 +366,7 @@ You never need to trust the author. The reviewer's attestation is the trust anch
 
 ### Path 3: Trusted Attester, Unsigned Skill
 
-The author didn't sign the skill at all (no SKILL.sig, no TRUST.json, no MANIFEST.json). A reviewer you trust attested it anyway — they reviewed the content, pinned it by SHA-256 digest and git commit, and signed a statement.
+The author didn't sign the skill at all (no TRUST.json, no SIGNATURES/). A reviewer you trust attested it anyway — they reviewed the content, pinned it by SHA-256 digest and git commit, and signed a statement.
 
 ```
 Author publishes skill (unsigned) → Reviewer attests → You trust reviewer → Skill runs
@@ -361,21 +446,24 @@ cp hooks/skill-verify.ts ~/.claude/hooks/skill-verify.ts
 ```
 > /malicious-skill
 SKILL BLOCKED: "malicious-skill" failed SkillSeal verification
-  Error: GPG signature verification failed
+  Error: Signature verification failed
   Skills must be signed and verified before execution.
 ```
 
 ### Prerequisites
 
 - All your skills must be signed (`skillseal sign-all ~/.claude/skills`)
-- The trust store must have the authors added (`skillseal trust add <fingerprint>`)
+- The trust store must have the authors added (`skillseal trust add <github> <fingerprint>`)
 - Bun must be installed (the hook runs via `bun run`)
 
 ## Roadmap
 
-- [ ] **Compiled binary distribution** — `bun build --compile` for standalone binaries (no Bun runtime needed). GPG-signed releases on GitHub. Binary is harder for agents/attackers to subtly modify compared to source files.
-- [ ] **SSH signing support** — Ed25519 SSH keys alongside GPG, for interop with projects using git SSH signing (e.g., The Hive protocol)
+- [x] **SSH signing support** — Ed25519 SSH keys alongside GPG, for interop with projects using git SSH signing
+- [x] **Multi-key signing** — Sign with multiple keys simultaneously via pluggable provider architecture
+- [x] **Multi-signature attestations** — Attestation bundles carry multiple signatures
+- [ ] **Compiled binary distribution** — `bun build --compile` for standalone binaries (no Bun runtime needed). Signed releases on GitHub.
 - [ ] **Key revocation** — Mechanism to invalidate compromised keys
+- [ ] **Hardware key support** — YubiKey/Nitrokey integration for signing operations
 
 ## Specifications
 

@@ -5,12 +5,12 @@ import { timingSafeEqual } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, relative, posix } from "node:path";
 
-const EXCLUDED_NAMES = new Set(["SKILL.md", "SKILL.sig", "MANIFEST.json", "TRUST.json"]);
-const EXCLUDED_DIRS = new Set(["ATTESTATIONS", ".git", "node_modules"]);
+const EXCLUDED_NAMES = new Set(["SKILL.md", "MANIFEST.json", "TRUST.json"]);
+const EXCLUDED_DIRS = new Set(["ATTESTATIONS", "SIGNATURES", ".git", "node_modules"]);
 
 // Plugin signing excludes the signed artifact and detached signature (same pattern as skills)
-const PLUGIN_EXCLUDED_NAMES = new Set(["MANIFEST.json", "TRUST.json", "PLUGIN.sig"]);
-const PLUGIN_EXCLUDED_DIRS = new Set(["ATTESTATIONS", ".git", "node_modules"]);
+const PLUGIN_EXCLUDED_NAMES = new Set(["MANIFEST.json", "TRUST.json"]);
+const PLUGIN_EXCLUDED_DIRS = new Set(["ATTESTATIONS", "SIGNATURES", ".git", "node_modules"]);
 // .claude-plugin/plugin.json is excluded from manifest since it contains manifest_hash (circular)
 const PLUGIN_EXCLUDED_PATHS = new Set([".claude-plugin/plugin.json"]);
 

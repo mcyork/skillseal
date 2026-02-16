@@ -1,5 +1,5 @@
 // SkillSeal CLI — verify command
-// Reads TRUST.json, fetches GitHub key, verifies signature + manifest integrity + attestations
+// Reads TRUST.json, fetches GitHub keys, verifies SIGNATURES/ + manifest integrity + attestations
 
 import {
   verifySkill,
@@ -188,7 +188,12 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
 
   if (result.author) {
     console.log(`  Author:    ${result.author.name} (${result.author.github})`);
-    console.log(`  Key:       ${result.author.fingerprint}`);
+    if (result.author.keys && result.author.keys.length > 0) {
+      console.log(`  Keys:`);
+      for (const key of result.author.keys) {
+        console.log(`    ${key.type.toUpperCase()}: ${key.fingerprint}`);
+      }
+    }
   }
 
   // Display attestation results

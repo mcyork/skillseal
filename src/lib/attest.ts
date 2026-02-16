@@ -1,12 +1,13 @@
 // SkillSeal — attestation creation and verification
 // Lets third-party reviewers vouch for a skill by signing a content-addressed statement
+// v0.2.0: Multi-signature attestation bundles via provider architecture
 
 import { join } from "node:path";
 import { readdir } from "node:fs/promises";
-import { mkdtemp, chmod, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { timingSafeEqual } from "node:crypto";
 import { isPlugin } from "./manifest";
+import { getProvider, detectProvider } from "./providers";
+import type { KeyConfig } from "./config";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,11 +48,16 @@ export interface AttestationStatement {
   };
 }
 
+export interface AttestationSignature {
+  type: string;     // provider type: "gpg", "ssh", etc.
+  value: string;    // the signature content
+}
+
 export interface AttestationBundle {
-  schema_version: "0.1.0";
+  schema_version: "0.2.0";
   format: "skillseal-attestation-bundle/v1";
   statement: AttestationStatement;
-  signature: string;
+  signatures: AttestationSignature[];
 }
 
 export interface AttestationResult {
@@ -101,7 +107,7 @@ function safeCompare(a: string, b: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Frontmatter parsing (minimal, same approach as verify.ts)
+// Frontmatter parsing
 // ---------------------------------------------------------------------------
 
 interface FrontmatterData {
@@ -163,7 +169,6 @@ async function getGitRemoteUrl(dir: string): Promise<string | null> {
     const out = await new Response(proc.stdout).text();
     const url = out.trim();
     if (!url) return null;
-    // Normalize git@github.com:user/repo.git -> github.com/user/repo
     return url
       .replace(/^git@github\.com:/, "github.com/")
       .replace(/^https?:\/\//, "")
@@ -192,7 +197,6 @@ export async function createAttestationStatement(
   let isSigned: boolean;
 
   if (plugin) {
-    // Plugin: digest the signed artifact (plugin.json)
     const pluginJsonPath = join(skillDir, ".claude-plugin", "plugin.json");
     if (!(await Bun.file(pluginJsonPath).exists())) {
       throw new Error(".claude-plugin/plugin.json not found in plugin directory");
@@ -204,7 +208,6 @@ export async function createAttestationStatement(
     version = pluginData.version ? String(pluginData.version) : "0.0.0";
     isSigned = pluginData.signed === true;
   } else {
-    // Skill: digest SKILL.md
     const skillMdPath = join(skillDir, "SKILL.md");
     if (!(await Bun.file(skillMdPath).exists())) {
       throw new Error("SKILL.md not found in skill directory");
@@ -218,15 +221,12 @@ export async function createAttestationStatement(
     isSigned = fm?.signed === true || String(fm?.signed) === "true";
   }
 
-  // Compute manifest digest — MANIFEST.json is optional (unsigned skills)
   const hasManifest = await Bun.file(manifestPath).exists();
   const manifestSha256 = hasManifest ? await sha256Hex(manifestPath) : null;
 
-  // Get git metadata
   const commit = await getGitCommit(skillDir);
   const repository = await getGitRemoteUrl(skillDir);
 
-  // Require git commit for unsigned skills/plugins — it's the provenance anchor
   if (!isSigned && !commit) {
     throw new Error(
       `Unsigned ${plugin ? "plugin" : "skill"} has no git commit. ` +
@@ -261,42 +261,35 @@ export async function createAttestationStatement(
 }
 
 // ---------------------------------------------------------------------------
-// GPG sign the canonical statement
+// Sign attestation with multiple keys
 // ---------------------------------------------------------------------------
 
-export async function signAttestation(
+export async function signAttestationMulti(
   statement: AttestationStatement,
-  fingerprint: string
-): Promise<string> {
+  keys: KeyConfig[],
+): Promise<{ signatures: AttestationSignature[]; errors: string[] }> {
   const canonical = canonicalJsonStringify(statement);
+  const signatures: AttestationSignature[] = [];
+  const errors: string[] = [];
 
-  // Write canonical statement to a temp file so GPG can use normal TTY for passphrase
-  const tmpDir = await mkdtemp(join(tmpdir(), "skillseal-sign-"));
-  const stmtPath = join(tmpDir, "statement.json");
-  const sigPath = join(tmpDir, "statement.json.sig");
-
-  try {
-    await Bun.write(stmtPath, canonical);
-
-    const proc = Bun.spawn(
-      ["gpg", "--detach-sign", "--armor", "--local-user", fingerprint, "--output", sigPath, "--", stmtPath],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, GPG_TTY: process.env.GPG_TTY || "/dev/tty" },
-      }
-    );
-
-    const exitCode = await proc.exited;
-    if (exitCode !== 0) {
-      const stderr = await new Response(proc.stderr).text();
-      throw new Error(`GPG signing failed: ${stderr.trim()}`);
+  for (const key of keys) {
+    const provider = getProvider(key.type);
+    if (!provider) {
+      errors.push(`No provider for key type: ${key.type}`);
+      continue;
     }
 
-    return await Bun.file(sigPath).text();
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
+    try {
+      const keyRef = key.key_path || key.fingerprint;
+      const value = await provider.signContent(canonical, keyRef);
+      signatures.push({ type: key.type, value: value.trim() });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${key.type} attestation signing failed: ${msg}`);
+    }
   }
+
+  return { signatures, errors };
 }
 
 // ---------------------------------------------------------------------------
@@ -305,13 +298,13 @@ export async function signAttestation(
 
 export function packageAttestationBundle(
   statement: AttestationStatement,
-  signature: string
+  signatures: AttestationSignature[]
 ): AttestationBundle {
   return {
-    schema_version: "0.1.0",
+    schema_version: "0.2.0",
     format: "skillseal-attestation-bundle/v1",
     statement,
-    signature: signature.trim(),
+    signatures,
   };
 }
 
@@ -339,7 +332,7 @@ export function parseAttestationBundle(json: string): AttestationBundle {
   if (bundle.format !== "skillseal-attestation-bundle/v1") {
     throw new Error(`Unknown attestation format: ${bundle.format}`);
   }
-  if (bundle.schema_version !== "0.1.0") {
+  if (bundle.schema_version !== "0.2.0") {
     throw new Error(`Unknown schema version: ${bundle.schema_version}`);
   }
 
@@ -360,7 +353,6 @@ export function parseAttestationBundle(json: string): AttestationBundle {
   if (!digests.skill_md_sha256) {
     throw new Error("Missing required digest field: skill_md_sha256");
   }
-  // manifest_sha256 can be null for unsigned skills
 
   const reviewer = stmt.reviewer as Record<string, unknown> | undefined;
   if (!reviewer || !reviewer.github || !reviewer.fingerprint) {
@@ -376,8 +368,18 @@ export function parseAttestationBundle(json: string): AttestationBundle {
     throw new Error(`Invalid attestation scope: ${attestation.scope}`);
   }
 
-  if (typeof bundle.signature !== "string" || !bundle.signature.includes("BEGIN PGP SIGNATURE")) {
-    throw new Error("Missing or invalid PGP signature in bundle");
+  // Validate signatures array
+  if (!Array.isArray(bundle.signatures) || bundle.signatures.length === 0) {
+    throw new Error("Missing or empty signatures array in bundle");
+  }
+
+  for (const sig of bundle.signatures as Array<Record<string, unknown>>) {
+    if (!sig.type || typeof sig.type !== "string") {
+      throw new Error("Each signature must have a 'type' string field");
+    }
+    if (!sig.value || typeof sig.value !== "string") {
+      throw new Error("Each signature must have a 'value' string field");
+    }
   }
 
   return data as AttestationBundle;
@@ -400,7 +402,7 @@ export async function verifyAttestationBundle(
   const plugin = await isPlugin(skillDir);
   const manifestPath = join(skillDir, "MANIFEST.json");
 
-  // 1. Check subject digest (SKILL.md for skills, plugin.json for plugins)
+  // 1. Check subject digest
   const subjectPath = plugin
     ? join(skillDir, ".claude-plugin", "plugin.json")
     : join(skillDir, "SKILL.md");
@@ -417,123 +419,66 @@ export async function verifyAttestationBundle(
     errors.push(`${subjectLabel} not found — cannot verify digests`);
   }
 
-  // 2. Check MANIFEST.json digest (only if attestation includes one — signed skills)
+  // 2. Check MANIFEST.json digest
   const attestedManifestHash = bundle.statement.subject.digests.manifest_sha256;
   if (attestedManifestHash) {
     if (await Bun.file(manifestPath).exists()) {
       const currentManifestHash = await sha256Hex(manifestPath);
       if (!safeCompare(currentManifestHash, attestedManifestHash)) {
         stale = true;
-        if (digestMatch) {
-          digestMatch = false;
-        }
+        if (digestMatch) digestMatch = false;
       }
     } else {
       errors.push("MANIFEST.json not found — cannot verify manifest digest");
     }
   }
-  // If manifest_sha256 is null, this is an unsigned skill attestation — SKILL.md hash is sufficient
 
-  // Finalize digest match
   if (!stale && errors.length === 0) {
     digestMatch = true;
   }
 
-  // 2. Verify GPG signature on the canonical statement
+  // 3. Verify signatures — need ONE valid signature from any provider
   const reviewer = bundle.statement.reviewer;
-  let tmpGpgHome: string | null = null;
+  const canonical = canonicalJsonStringify(bundle.statement);
 
-  try {
-    // Fetch reviewer's key from GitHub
-    const keyUrl = `https://github.com/${reviewer.github}.gpg`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
+  for (const sig of bundle.signatures) {
+    const provider = getProvider(sig.type);
+    if (!provider) {
+      // Try auto-detect from content
+      const detected = detectProvider(sig.value);
+      if (!detected) {
+        errors.push(`Unknown signature type: ${sig.type}`);
+        continue;
+      }
+    }
 
-    let keyData: string;
+    const p = getProvider(sig.type) || detectProvider(sig.value);
+    if (!p) continue;
+
     try {
-      const response = await fetch(keyUrl, { signal: controller.signal });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} from ${keyUrl}`);
-      }
-      keyData = await response.text();
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (!keyData.includes("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
-      throw new Error("GitHub response is not a valid PGP key");
-    }
-
-    // Import into temp keyring
-    tmpGpgHome = await mkdtemp(join(tmpdir(), "skillseal-attest-"));
-    await chmod(tmpGpgHome, 0o700);
-
-    const importProc = Bun.spawn(
-      ["gpg", "--homedir", tmpGpgHome, "--batch", "--import"],
-      {
-        stdin: new TextEncoder().encode(keyData),
-        stdout: "pipe",
-        stderr: "pipe",
-      }
-    );
-    await importProc.exited;
-
-    // Verify the key fingerprint matches
-    const listProc = Bun.spawn(
-      ["gpg", "--homedir", tmpGpgHome, "--list-keys", "--with-colons"],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-    await listProc.exited;
-
-    const listOutput = await new Response(listProc.stdout).text();
-    const fingerprints = listOutput
-      .split("\n")
-      .filter((l) => l.startsWith("fpr:"))
-      .map((l) => l.split(":")[9]);
-
-    const expectedFp = reviewer.fingerprint.toUpperCase().replace(/\s/g, "");
-    const foundKey = fingerprints.some((fp) => {
-      if (!fp) return false;
-      return safeCompare(fp.toUpperCase(), expectedFp);
-    });
-
-    if (!foundKey) {
-      errors.push(
-        `Reviewer key fingerprint mismatch: expected ${expectedFp} not found in keys from ${reviewer.github}`
-      );
-    } else {
-      // Verify the signature against the canonical statement
-      const canonical = canonicalJsonStringify(bundle.statement);
-
-      // Write both statement and signature to temp files
-      const stmtTmp = join(tmpGpgHome, "statement.json");
-      const sigTmp = join(tmpGpgHome, "statement.json.sig");
-      await Bun.write(stmtTmp, canonical);
-      await Bun.write(sigTmp, bundle.signature);
-
-      const verifyProc = Bun.spawn(
-        ["gpg", "--homedir", tmpGpgHome, "--batch", "--verify", "--", sigTmp, stmtTmp],
-        {
-          stdout: "pipe",
-          stderr: "pipe",
-        }
+      const result = await p.verifyContent(
+        canonical,
+        sig.value,
+        reviewer.github,
+        reviewer.fingerprint,
       );
 
-      const verifyExit = await verifyProc.exited;
-      if (verifyExit === 0) {
+      if (result.valid) {
         signatureValid = true;
+        break; // One valid signature is sufficient
       } else {
-        const stderr = await new Response(verifyProc.stderr).text();
-        errors.push(`Attestation signature verification failed: ${stderr.trim()}`);
+        for (const err of result.errors) {
+          errors.push(`${sig.type} attestation: ${err}`);
+        }
       }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(`${sig.type} attestation verify error: ${message}`);
     }
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    errors.push(`Attestation key fetch/verify error: ${message}`);
-  } finally {
-    if (tmpGpgHome) {
-      await rm(tmpGpgHome, { recursive: true, force: true });
-    }
+  }
+
+  if (!signatureValid && errors.length === 0) {
+    errors.push("No valid signature found in attestation bundle");
   }
 
   return {
@@ -553,7 +498,6 @@ export async function verifyAttestationBundle(
 
 export async function discoverLocalAttestations(skillDir: string): Promise<AttestationBundle[]> {
   const attestDir = join(skillDir, "ATTESTATIONS");
-  const bunFile = Bun.file(attestDir);
 
   try {
     const entries = await readdir(attestDir, { withFileTypes: true });
@@ -574,7 +518,6 @@ export async function discoverLocalAttestations(skillDir: string): Promise<Attes
 
     return bundles;
   } catch {
-    // ATTESTATIONS/ directory doesn't exist or can't be read
     return [];
   }
 }
@@ -583,7 +526,7 @@ export async function discoverLocalAttestations(skillDir: string): Promise<Attes
 // Discovery: fetch from explicit URL
 // ---------------------------------------------------------------------------
 
-const MAX_ATTESTATION_SIZE = 64 * 1024; // 64 KB
+const MAX_ATTESTATION_SIZE = 64 * 1024;
 
 export async function fetchAttestationFromUrl(url: string): Promise<AttestationBundle> {
   const controller = new AbortController();
@@ -623,7 +566,6 @@ export async function probeReviewerRepo(
   skillName: string,
   version: string
 ): Promise<AttestationBundle | null> {
-  // Convention: github.com/{reviewer}/skillseal-attestations/{author}/{skill}/{version}.attestation.json
   const url =
     `https://raw.githubusercontent.com/${reviewerGithub}/skillseal-attestations/main/` +
     `${authorGithub}/${skillName}/${version}.attestation.json`;
@@ -655,7 +597,6 @@ export async function discoverAttestations(
   const bundles: AttestationBundle[] = [];
   const fetches: Promise<void>[] = [];
 
-  // 1. Local ATTESTATIONS/ directory
   if (options.localDir !== false) {
     fetches.push(
       discoverLocalAttestations(skillDir).then((local) => {
@@ -664,7 +605,6 @@ export async function discoverAttestations(
     );
   }
 
-  // 2. Explicit URLs
   if (options.explicitUrls) {
     for (const url of options.explicitUrls) {
       fetches.push(
@@ -678,7 +618,6 @@ export async function discoverAttestations(
     }
   }
 
-  // 3. Probe trusted reviewers' repos
   if (
     options.trustedReviewers &&
     options.authorGithub &&

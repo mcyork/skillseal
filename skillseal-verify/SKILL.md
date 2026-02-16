@@ -3,10 +3,9 @@ skill: skillseal-verify
 version: 1.0.0
 author: ian@esoup.net
 github: mcyork
-author_fingerprint: 7097CE1EF54E0808FD3855427ED9682FF64286D0
 signed: true
 attestations: []
-manifest_hash: sha256:64760ef1e4a1b16c2424831e8d7ec01710b142122b09bcaa98584cb71647457c
+manifest_hash: sha256:d7280095942fab81154dbd65abbd95697d363b35d67fd109511bb2419f6a2227
 ---
 
 # SkillSeal Verify

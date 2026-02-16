@@ -1,6 +1,6 @@
 # SkillSeal Attestation Format Specification
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 **Status:** Draft
 
 ## Overview
@@ -11,8 +11,9 @@ An attestation is a self-contained, cryptographically signed statement by a thir
 
 1. **Decoupled** — The reviewer creates and hosts attestations independently. The skill author is never involved.
 2. **Content-addressed** — Attestations pin the exact bytes of SKILL.md and MANIFEST.json via SHA-256 digests.
-3. **Self-contained** — A single `.attestation.json` file contains the statement, reviewer identity, and GPG signature.
+3. **Self-contained** — A single `.attestation.json` file contains the statement, reviewer identity, and cryptographic signatures.
 4. **Staleness-aware** — When a skill's digests change, existing attestations become stale. This is correct behavior (like a PR approval invalidated by new commits).
+5. **Multi-key** — Attestation bundles carry multiple signatures (one per key type), matching the multi-key signing architecture.
 
 ## Bundle Format
 
@@ -20,7 +21,7 @@ File extension: `.attestation.json`
 
 ```json
 {
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "format": "skillseal-attestation-bundle/v1",
   "statement": {
     "type": "https://skillseal.dev/attestation/review/v1",
@@ -37,7 +38,7 @@ File extension: `.attestation.json`
     "reviewer": {
       "name": "<display-name>",
       "github": "<github-username>",
-      "fingerprint": "<40-hex-char-gpg-fingerprint>"
+      "fingerprint": "<primary-key-fingerprint>"
     },
     "attestation": {
       "scope": "<scope-value>",
@@ -45,7 +46,10 @@ File extension: `.attestation.json`
       "date": "<ISO-8601>"
     }
   },
-  "signature": "-----BEGIN PGP SIGNATURE-----\n...\n-----END PGP SIGNATURE-----"
+  "signatures": [
+    { "type": "gpg", "value": "-----BEGIN PGP SIGNATURE-----\n...\n-----END PGP SIGNATURE-----" },
+    { "type": "ssh", "value": "-----BEGIN SSH SIGNATURE-----\n...\n-----END SSH SIGNATURE-----" }
+  ]
 }
 ```
 
@@ -55,10 +59,21 @@ File extension: `.attestation.json`
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `schema_version` | Yes | Always `"0.1.0"` |
+| `schema_version` | Yes | `"0.2.0"` |
 | `format` | Yes | Always `"skillseal-attestation-bundle/v1"` |
 | `statement` | Yes | The signed attestation statement |
-| `signature` | Yes | ASCII-armored detached GPG signature over the canonical statement |
+| `signatures` | Yes | Array of `{type, value}` objects — one per signing key |
+
+#### `signatures[]`
+
+Each entry in the `signatures` array represents one cryptographic signature over the canonical statement:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `type` | Yes | Provider type (e.g., `"gpg"`, `"ssh"`) |
+| `value` | Yes | The signature content (ASCII-armored for GPG, base64 for SSH) |
+
+Verification requires only ONE valid signature in the array to pass.
 
 #### `statement.subject`
 
@@ -75,9 +90,9 @@ File extension: `.attestation.json`
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Reviewer's display name (from GPG key UID or config) |
-| `github` | Yes | Reviewer's GitHub username (key fetched from `github.com/<username>.gpg`) |
-| `fingerprint` | Yes | Reviewer's GPG key fingerprint (40 hex characters, uppercase) |
+| `name` | Yes | Reviewer's display name (from config or key UID) |
+| `github` | Yes | Reviewer's GitHub username (for key discovery) |
+| `fingerprint` | Yes | Reviewer's primary key fingerprint |
 
 #### `statement.attestation`
 
@@ -102,8 +117,10 @@ File extension: `.attestation.json`
 
 1. Build the `statement` JSON object
 2. Serialize using **canonical JSON** (sorted keys, 2-space indent, newline-terminated)
-3. Create a detached GPG signature: `gpg --detach-sign --armor --local-user <fingerprint>`
-4. Package into the bundle: `{ schema_version, format, statement, signature }`
+3. For each configured key, sign the canonical statement bytes using the provider:
+   - GPG: `gpg --detach-sign --armor --local-user <fingerprint>`
+   - SSH: `ssh-keygen -Y sign -f <key_path> -n skillseal`
+4. Package into the bundle: `{ schema_version, format, statement, signatures: [{type, value}, ...] }`
 
 ### Canonical JSON
 
@@ -119,13 +136,15 @@ Deterministic serialization ensures the same statement always produces the same 
 
 1. Parse the `.attestation.json` bundle
 2. Validate schema (format, required fields, scope values)
-3. Fetch reviewer's GPG key from `https://github.com/<reviewer.github>.gpg`
-4. Import into temporary GPG keyring
-5. Verify fingerprint matches `reviewer.fingerprint`
-6. Re-serialize `statement` using canonical JSON
-7. Verify `signature` against the canonical statement bytes
-8. Compare `subject.digests` against the actual files in the skill directory
-9. Report: signature validity, digest match/stale status
+3. For each signature in `signatures[]`:
+   a. Determine the provider by `type`
+   b. Fetch reviewer's key from GitHub (GPG or SSH endpoint)
+   c. Verify fingerprint matches `reviewer.fingerprint`
+   d. Re-serialize `statement` using canonical JSON
+   e. Verify the signature against the canonical statement bytes
+4. If ANY signature verifies successfully, the attestation is valid
+5. Compare `subject.digests` against the actual files in the skill directory
+6. Report: signature validity, digest match/stale status
 
 ## Discovery Mechanisms
 
@@ -145,6 +164,9 @@ skill-package/
   SKILL.md
   MANIFEST.json
   TRUST.json
+  SIGNATURES/
+    gpg.sig
+    ssh.sig
   ATTESTATIONS/
     janesec-1.0.0.attestation.json
     bobaudit-1.0.0.attestation.json
@@ -192,10 +214,14 @@ When verified attestations are present, `evaluatePolicy()` uses them instead of 
 | `known_author_with_attestations` | Attestations exist but none from trusted reviewers |
 | `known_author_no_attestations` | No attestations (or none with valid signatures) |
 
+## Migration from v0.1.0
+
+Bundles with schema version `0.1.0` use a single `"signature"` field (string) instead of the `"signatures"` array. SkillSeal v0.2.0 can verify both formats — it checks for the `signatures` array first, then falls back to the legacy `signature` field.
+
 ## What This Specification Does NOT Cover
 
 - **Transparency logs** — No centralized attestation registry
-- **Keyless signing** — GPG keys are the identity layer (no Sigstore/OIDC)
+- **Keyless signing** — GPG/SSH keys are the identity layer (no Sigstore/OIDC)
 - **Partial attestation** — Attestations cover the full package
 - **Attestation revocation** — Reviewer deletes from their repo
 - **Meta-attestation** — No "I attest that X's attestation is valid"
