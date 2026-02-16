@@ -332,8 +332,10 @@ export function parseAttestationBundle(json: string): AttestationBundle {
   if (bundle.format !== "skillseal-attestation-bundle/v1") {
     throw new Error(`Unknown attestation format: ${bundle.format}`);
   }
-  if (bundle.schema_version !== "0.2.0") {
-    throw new Error(`Unknown schema version: ${bundle.schema_version}`);
+  const sv = String(bundle.schema_version || "");
+  const [svMajor, svMinor] = sv.split(".").map(Number);
+  if (svMajor !== 0 || svMinor < 2) {
+    throw new Error(`Incompatible schema version: ${sv} (need 0.2.x+)`);
   }
 
   const stmt = bundle.statement as Record<string, unknown> | undefined;
