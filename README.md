@@ -88,23 +88,58 @@ All commits in this repository are GPG-signed with the same key. On GitHub, ever
 - GPG: `7097CE1EF54E0808FD3855427ED9682FF64286D0`
 - SSH: `SHA256:vZcivMOtxMdRjvcyGpNSjECXhb/wspMSsHO/bfPXBmQ` (Ed25519)
 
+## Install
+
+### Option 1: Compiled Binary (recommended)
+
+Standalone binaries are available on [GitHub Releases](https://github.com/mcyork/skillseal/releases). No Bun or Node.js runtime required.
+
+```bash
+# Download the binary for your platform
+# macOS Apple Silicon:
+curl -fSL https://github.com/mcyork/skillseal/releases/latest/download/skillseal-darwin-arm64 -o skillseal
+# macOS Intel:
+curl -fSL https://github.com/mcyork/skillseal/releases/latest/download/skillseal-darwin-x64 -o skillseal
+# Linux x64:
+curl -fSL https://github.com/mcyork/skillseal/releases/latest/download/skillseal-linux-x64 -o skillseal
+# Linux ARM64 (Raspberry Pi 4+):
+curl -fSL https://github.com/mcyork/skillseal/releases/latest/download/skillseal-linux-arm64 -o skillseal
+
+chmod +x skillseal
+
+# Verify the binary checksum
+curl -fSL https://github.com/mcyork/skillseal/releases/latest/download/SHA256SUMS -o SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing   # macOS
+# sha256sum -c SHA256SUMS --ignore-missing      # Linux
+
+# Move to your PATH
+sudo mv skillseal /usr/local/bin/
+```
+
+### Option 2: From Source
+
+Requires [Bun](https://bun.sh).
+
+```bash
+git clone https://github.com/mcyork/skillseal.git
+cd skillseal && bun install
+# Run via: bun run skillseal <command>
+```
+
 ## Quick Start
 
 ```bash
-# Install (after bootstrap verification above)
-cd skillseal && bun install
-
 # Sign a skill (signs with all configured keys)
-bun run skillseal sign /path/to/skill-directory
+skillseal sign /path/to/skill-directory
 
 # Sign a plugin (auto-detected via .claude-plugin/plugin.json)
-bun run skillseal sign /path/to/plugin-directory
+skillseal sign /path/to/plugin-directory
 
 # Verify a skill or plugin (one valid signature suffices)
-bun run skillseal verify /path/to/skill-or-plugin-directory
+skillseal verify /path/to/skill-or-plugin-directory
 
 # Scaffold a new skill package
-bun run skillseal init /path/to/new-skill
+skillseal init /path/to/new-skill
 ```
 
 ## How It Works
@@ -466,7 +501,7 @@ SKILL BLOCKED: "malicious-skill" failed SkillSeal verification
 
 **Near-term:**
 
-- [ ] **Compiled binaries** — `bun build --compile` standalone binaries for macOS (x64/ARM64), Linux (x64/ARM64), and Windows. No Bun runtime required. Signed GitHub Releases with SHA256 checksums.
+- [x] **Compiled binaries** — Standalone binaries for macOS (x64/ARM64) and Linux (x64/ARM64) via `bun build --compile`. SHA256 checksums on GitHub Releases.
 - [ ] **Key revocation** — Mechanism to invalidate compromised keys via trust store revocation list.
 
 **Strategic:**
