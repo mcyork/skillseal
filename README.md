@@ -6,6 +6,8 @@ Cryptographic signing and verification for LLM agent skills and plugins.
 
 LLM agents install and execute skills and plugins — Markdown files, commands, hooks, and agents that function as installers with full system privileges. There is no standard mechanism to verify who authored them or whether they have been tampered with after publication.
 
+Major agent platforms have converged on `SKILL.md` as the instruction manifest format — both Claude Code and OpenAI use it. These platforms provide execution and containment (sandboxing, network controls), but none provide a trust layer: no signing, no provenance, no integrity verification. SkillSeal is that missing layer.
+
 ## What SkillSeal Does
 
 SkillSeal provides a lightweight signing framework for skill packages and plugins:
