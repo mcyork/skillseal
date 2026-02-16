@@ -732,6 +732,46 @@ Existing solutions cluster into three categories:
 
 SkillSeal occupies the gap between these: a **portable, self-bootstrapping, artifact-level signing standard** that works for individual authors today and composes with gateways and platforms tomorrow.
 
+# Adoption Perspectives
+
+SkillSeal's five design principles — lightweight, self-bootstrapping, decentralized, composable, fail-closed — produce a system that serves different stakeholders without requiring separate features for each. The same primitives operate at every scale.
+
+## Skill Authors
+
+A skill author's adoption path is minimal: generate a GPG key, upload it to GitHub, and run `skillseal sign`. The signed artifact travels with the skill — no registry to publish to, no account to create, no CI pipeline to configure. The signature is a file alongside the code.
+
+This matters because the adoption barrier determines whether signing actually happens. Every prior attempt at signing developer artifacts (PGP-signed emails, signed git tags) failed to achieve widespread adoption because the overhead exceeded the perceived benefit. SkillSeal's overhead is one command. The benefit is that agents can verify the author before executing the skill — which, given the threat landscape documented in Section 2, is increasingly the difference between a skill that runs and one that is blocked.
+
+The signature also functions as portable reputation. A GPG fingerprint is not tied to a platform. An author who signs skills today builds a verifiable identity that is recognizable across any agent runtime that supports SkillSeal verification — the same key, the same fingerprint, the same trust relationship.
+
+## Security Reviewers
+
+The attestation system creates a distinct role: the security reviewer. A reviewer examines a skill's contents, signs a statement binding their identity to the exact artifact digests, and publishes the attestation independently. The skill author is not involved and cannot prevent or control the review.
+
+This role does not exist in the current agent ecosystem. No mechanism allows a security-conscious individual or team to say "I have reviewed this skill and vouch for its contents" in a way that agents can verify mechanically. Attestations make this possible.
+
+A reviewer who builds a track record of careful attestations becomes a trust anchor. Other users add the reviewer's fingerprint to their local trust store, and every skill the reviewer has attested becomes executable without further intervention. This is the same trust model as a package maintainer in a Linux distribution — except it operates without a central distribution authority.
+
+The reviewer convention — hosting attestations in a public `skillseal-attestations` repository on GitHub — means reviews are transparent, auditable, and versioned. Anyone can inspect what a reviewer has attested, when, and for which versions.
+
+## Open Source Communities
+
+When multiple authors sign and multiple reviewers attest, a web of trust emerges organically. No central registry coordinates this. Each user's trust store reflects their own trust decisions: which authors they trust directly, which reviewers they rely on for skills from unknown authors.
+
+This mirrors how trust actually works in open source. Developers trust certain maintainers, certain security researchers, certain organizations — not because a central authority told them to, but because reputation accumulates through consistent, verifiable behavior. SkillSeal makes this implicit trust explicit and mechanically enforceable.
+
+The decentralized structure also means that different communities can have different trust graphs. A security-focused community might require attestations from specific reviewers. A research community might trust a smaller set of prolific authors directly. Neither community needs to convince the other to change their trust model.
+
+## Enterprise Environments
+
+SkillSeal does not include enterprise-specific features. It does not need to.
+
+The composable design principle means that SkillSeal's artifact-layer signatures are consumable by any system that can parse JSON and invoke GPG. An enterprise that wants centralized enforcement can build a proxy that runs `skillseal verify` at the network boundary. An organization that wants managed trust can distribute a signed trust store file that agents merge with their local configuration. A compliance team that wants audit logging can collect verification results from hook output.
+
+None of these require changes to SkillSeal itself. The protocol is the same. The signature format is the same. The trust store schema is the same. Enterprise tooling is a consumer of the standard, not a feature of it.
+
+This is the same relationship that TLS certificates have with enterprise certificate management. The certificate format does not change for enterprise use. The enterprise builds policy, distribution, and monitoring on top of a standard that works identically for an individual and a Fortune 500.
+
 # Security Analysis
 
 ## Timing-Safe Comparisons
@@ -773,12 +813,6 @@ Verification uses `Bun.spawn()` with array-style argument passing (exec-style, n
 # Future Work
 
 **Key revocation.** A `revoked_fingerprints` list in the trust store, combined with checking GPG's output for revocation signatures after key import. Authors can revoke compromised keys, and verification will detect the revocation.
-
-**Transparency log.** An optional, append-only log of attestations. Not required for operation (decentralized model preserved) but useful for auditing: "who has attested what, and when?" Could be hosted on GitHub Pages as a JSON log.
-
-**Organization policies.** Centrally managed trust stores for enterprises: "all agents in this org trust these authors and require these reviewers." Distributed via a signed policy file that agents fetch and merge with local trust.
-
-**Enterprise proxy integration.** A SkillSeal-aware proxy that evaluates trust at the network boundary, providing centralized enforcement with full audit logging. The proxy consumes the same trust store format and signature protocol.
 
 **Automated scanning attestations.** Integration with static analysis tools that can automatically generate `automated-scan` attestation bundles. An LLM agent reviews skill instructions for suspicious patterns and signs its findings.
 

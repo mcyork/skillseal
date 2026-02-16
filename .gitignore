@@ -7,3 +7,7 @@ bun.lock
 bun.lockb
 skillseal-project-narrative.md
 SECURITY-REVIEW.md
+docs/skillseal-cheatsheet.md
+docs/skillseal-cheatsheet.pdf
+skillseal-dump.txt
+*.attestation.json

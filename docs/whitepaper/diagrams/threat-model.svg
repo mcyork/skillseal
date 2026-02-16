@@ -1,107 +1,118 @@
-<?xml version="1.0" encoding="utf-8"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" data-d2-version="0.7.1" preserveAspectRatio="xMinYMin meet" viewBox="0 0 1036 894"><svg class="d2-3592939932 d2-svg" width="1036" height="894" viewBox="-89 -89 1036 894"><rect x="-89.000000" y="-89.000000" width="1036.000000" height="894.000000" rx="0.000000" fill="#FFFFFF" class=" fill-N7" stroke-width="0" /><style type="text/css"><![CDATA[
-.d2-3592939932 .text {
-	font-family: "d2-3592939932-font-regular";
-}
-@font-face {
-	font-family: d2-3592939932-font-regular;
-	src: url("data:application/font-woff;base64,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");
-}
-.d2-3592939932 .text-bold {
-	font-family: "d2-3592939932-font-bold";
-}
-@font-face {
-	font-family: d2-3592939932-font-bold;
-	src: url("data:application/font-woff;base64,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");
-}]]></style><style type="text/css"><![CDATA[.shape {
-  shape-rendering: geometricPrecision;
-  stroke-linejoin: round;
-}
-.connection {
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.blend {
-  mix-blend-mode: multiply;
-  opacity: 0.5;
-}
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 550" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 4 L0 8z" fill="#059669"/>
+    </marker>
+    <filter id="s"><feDropShadow dx="0" dy="1" stdDeviation="2" flood-opacity="0.07"/></filter>
+    <linearGradient id="hdr" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#D97706" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#D97706"/>
+      <stop offset="100%" stop-color="#D97706" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
 
-		.d2-3592939932 .fill-N1{fill:#0A0F25;}
-		.d2-3592939932 .fill-N2{fill:#676C7E;}
-		.d2-3592939932 .fill-N3{fill:#9499AB;}
-		.d2-3592939932 .fill-N4{fill:#CFD2DD;}
-		.d2-3592939932 .fill-N5{fill:#DEE1EB;}
-		.d2-3592939932 .fill-N6{fill:#EEF1F8;}
-		.d2-3592939932 .fill-N7{fill:#FFFFFF;}
-		.d2-3592939932 .fill-B1{fill:#0D32B2;}
-		.d2-3592939932 .fill-B2{fill:#0D32B2;}
-		.d2-3592939932 .fill-B3{fill:#E3E9FD;}
-		.d2-3592939932 .fill-B4{fill:#E3E9FD;}
-		.d2-3592939932 .fill-B5{fill:#EDF0FD;}
-		.d2-3592939932 .fill-B6{fill:#F7F8FE;}
-		.d2-3592939932 .fill-AA2{fill:#4A6FF3;}
-		.d2-3592939932 .fill-AA4{fill:#EDF0FD;}
-		.d2-3592939932 .fill-AA5{fill:#F7F8FE;}
-		.d2-3592939932 .fill-AB4{fill:#EDF0FD;}
-		.d2-3592939932 .fill-AB5{fill:#F7F8FE;}
-		.d2-3592939932 .stroke-N1{stroke:#0A0F25;}
-		.d2-3592939932 .stroke-N2{stroke:#676C7E;}
-		.d2-3592939932 .stroke-N3{stroke:#9499AB;}
-		.d2-3592939932 .stroke-N4{stroke:#CFD2DD;}
-		.d2-3592939932 .stroke-N5{stroke:#DEE1EB;}
-		.d2-3592939932 .stroke-N6{stroke:#EEF1F8;}
-		.d2-3592939932 .stroke-N7{stroke:#FFFFFF;}
-		.d2-3592939932 .stroke-B1{stroke:#0D32B2;}
-		.d2-3592939932 .stroke-B2{stroke:#0D32B2;}
-		.d2-3592939932 .stroke-B3{stroke:#E3E9FD;}
-		.d2-3592939932 .stroke-B4{stroke:#E3E9FD;}
-		.d2-3592939932 .stroke-B5{stroke:#EDF0FD;}
-		.d2-3592939932 .stroke-B6{stroke:#F7F8FE;}
-		.d2-3592939932 .stroke-AA2{stroke:#4A6FF3;}
-		.d2-3592939932 .stroke-AA4{stroke:#EDF0FD;}
-		.d2-3592939932 .stroke-AA5{stroke:#F7F8FE;}
-		.d2-3592939932 .stroke-AB4{stroke:#EDF0FD;}
-		.d2-3592939932 .stroke-AB5{stroke:#F7F8FE;}
-		.d2-3592939932 .background-color-N1{background-color:#0A0F25;}
-		.d2-3592939932 .background-color-N2{background-color:#676C7E;}
-		.d2-3592939932 .background-color-N3{background-color:#9499AB;}
-		.d2-3592939932 .background-color-N4{background-color:#CFD2DD;}
-		.d2-3592939932 .background-color-N5{background-color:#DEE1EB;}
-		.d2-3592939932 .background-color-N6{background-color:#EEF1F8;}
-		.d2-3592939932 .background-color-N7{background-color:#FFFFFF;}
-		.d2-3592939932 .background-color-B1{background-color:#0D32B2;}
-		.d2-3592939932 .background-color-B2{background-color:#0D32B2;}
-		.d2-3592939932 .background-color-B3{background-color:#E3E9FD;}
-		.d2-3592939932 .background-color-B4{background-color:#E3E9FD;}
-		.d2-3592939932 .background-color-B5{background-color:#EDF0FD;}
-		.d2-3592939932 .background-color-B6{background-color:#F7F8FE;}
-		.d2-3592939932 .background-color-AA2{background-color:#4A6FF3;}
-		.d2-3592939932 .background-color-AA4{background-color:#EDF0FD;}
-		.d2-3592939932 .background-color-AA5{background-color:#F7F8FE;}
-		.d2-3592939932 .background-color-AB4{background-color:#EDF0FD;}
-		.d2-3592939932 .background-color-AB5{background-color:#F7F8FE;}
-		.d2-3592939932 .color-N1{color:#0A0F25;}
-		.d2-3592939932 .color-N2{color:#676C7E;}
-		.d2-3592939932 .color-N3{color:#9499AB;}
-		.d2-3592939932 .color-N4{color:#CFD2DD;}
-		.d2-3592939932 .color-N5{color:#DEE1EB;}
-		.d2-3592939932 .color-N6{color:#EEF1F8;}
-		.d2-3592939932 .color-N7{color:#FFFFFF;}
-		.d2-3592939932 .color-B1{color:#0D32B2;}
-		.d2-3592939932 .color-B2{color:#0D32B2;}
-		.d2-3592939932 .color-B3{color:#E3E9FD;}
-		.d2-3592939932 .color-B4{color:#E3E9FD;}
-		.d2-3592939932 .color-B5{color:#EDF0FD;}
-		.d2-3592939932 .color-B6{color:#F7F8FE;}
-		.d2-3592939932 .color-AA2{color:#4A6FF3;}
-		.d2-3592939932 .color-AA4{color:#EDF0FD;}
-		.d2-3592939932 .color-AA5{color:#F7F8FE;}
-		.d2-3592939932 .color-AB4{color:#EDF0FD;}
-		.d2-3592939932 .color-AB5{color:#F7F8FE;}.appendix text.text{fill:#0A0F25}.md{--color-fg-default:#0A0F25;--color-fg-muted:#676C7E;--color-fg-subtle:#9499AB;--color-canvas-default:#FFFFFF;--color-canvas-subtle:#EEF1F8;--color-border-default:#0D32B2;--color-border-muted:#0D32B2;--color-neutral-muted:#EEF1F8;--color-accent-fg:#0D32B2;--color-accent-emphasis:#0D32B2;--color-attention-subtle:#676C7E;--color-danger-fg:red;}.sketch-overlay-B1{fill:url(#streaks-darker-d2-3592939932);mix-blend-mode:lighten}.sketch-overlay-B2{fill:url(#streaks-darker-d2-3592939932);mix-blend-mode:lighten}.sketch-overlay-B3{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.sketch-overlay-B4{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.sketch-overlay-B5{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.sketch-overlay-B6{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.sketch-overlay-AA2{fill:url(#streaks-dark-d2-3592939932);mix-blend-mode:overlay}.sketch-overlay-AA4{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.sketch-overlay-AA5{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.sketch-overlay-AB4{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.sketch-overlay-AB5{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.sketch-overlay-N1{fill:url(#streaks-darker-d2-3592939932);mix-blend-mode:lighten}.sketch-overlay-N2{fill:url(#streaks-dark-d2-3592939932);mix-blend-mode:overlay}.sketch-overlay-N3{fill:url(#streaks-normal-d2-3592939932);mix-blend-mode:color-burn}.sketch-overlay-N4{fill:url(#streaks-normal-d2-3592939932);mix-blend-mode:color-burn}.sketch-overlay-N5{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.sketch-overlay-N6{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.sketch-overlay-N7{fill:url(#streaks-bright-d2-3592939932);mix-blend-mode:darken}.light-code{display: block}.dark-code{display: none}]]></style><g class="YXR0YWNrcw=="><g class="shape" ><rect x="12.000000" y="40.000000" width="280.000000" height="644.000000" rx="8.000000" stroke="#dc2626" fill="#fef2f2" style="stroke-width:2;" /></g><text x="152.000000" y="73.000000" fill="#0A0F25" class="text fill-N1" style="text-anchor:middle;font-size:28px">Attack Vectors</text></g><g class="ZGVmZW5zZXM="><g class="shape" ><rect x="539.000000" y="12.000000" width="307.000000" height="692.000000" rx="8.000000" stroke="#059669" fill="#f0fdf4" style="stroke-width:2;" /></g><text x="692.500000" y="45.000000" fill="#0A0F25" class="text fill-N1" style="text-anchor:middle;font-size:28px">SkillSeal Defenses</text></g><g class="YXR0YWNrcy5mb3JnZXJ5"><g class="shape" ><rect x="91.000000" y="90.000000" width="151.000000" height="66.000000" rx="6.000000" stroke="#b91c1c" fill="#dc2626" style="stroke-width:2;" /></g><text x="166.500000" y="128.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px">1. Skill Forgery</text></g><g class="YXR0YWNrcy50YW1wZXI="><g class="shape" ><rect x="62.000000" y="176.000000" width="180.000000" height="82.000000" rx="6.000000" stroke="#b91c1c" fill="#dc2626" style="stroke-width:2;" /></g><text x="152.000000" y="214.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px"><tspan x="152.000000" dy="0.000000">2. Post-Publication</tspan><tspan x="152.000000" dy="18.500000">Tampering</tspan></text></g><g class="YXR0YWNrcy5rZXlfc3Vi"><g class="shape" ><rect x="62.000000" y="278.000000" width="180.000000" height="66.000000" rx="6.000000" stroke="#b91c1c" fill="#dc2626" style="stroke-width:2;" /></g><text x="152.000000" y="316.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px">3. Key Substitution</text></g><g class="YXR0YWNrcy50cnVzdF9wb2lzb24="><g class="shape" ><rect x="101.000000" y="364.000000" width="141.000000" height="82.000000" rx="6.000000" stroke="#b91c1c" fill="#dc2626" style="stroke-width:2;" /></g><text x="171.500000" y="402.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px"><tspan x="171.500000" dy="0.000000">4. Trust Store</tspan><tspan x="171.500000" dy="18.500000">Poisoning</tspan></text></g><g class="YXR0YWNrcy5zb2NpYWw="><g class="shape" ><rect x="105.000000" y="466.000000" width="137.000000" height="82.000000" rx="6.000000" stroke="#b91c1c" fill="#dc2626" style="stroke-width:2;" /></g><text x="173.500000" y="504.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px"><tspan x="173.500000" dy="0.000000">5. LLM Social</tspan><tspan x="173.500000" dy="18.500000">Engineering</tspan></text></g><g class="YXR0YWNrcy5taXRt"><g class="shape" ><rect x="70.000000" y="568.000000" width="172.000000" height="66.000000" rx="6.000000" stroke="#b91c1c" fill="#dc2626" style="stroke-width:2;" /></g><text x="156.000000" y="606.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px">6. MITM Key Fetch</text></g><g class="ZGVmZW5zZXMuZ3BnX3NpZw=="><g class="shape" ><rect x="589.000000" y="62.000000" width="149.000000" height="82.000000" rx="6.000000" stroke="#047857" fill="#059669" style="stroke-width:2;" /></g><text x="663.500000" y="100.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px"><tspan x="663.500000" dy="0.000000">GPG Signature</tspan><tspan x="663.500000" dy="18.500000">Verification</tspan></text></g><g class="ZGVmZW5zZXMubWFuaWZlc3Q="><g class="shape" ><rect x="589.000000" y="164.000000" width="169.000000" height="82.000000" rx="6.000000" stroke="#047857" fill="#059669" style="stroke-width:2;" /></g><text x="673.500000" y="202.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px"><tspan x="673.500000" dy="0.000000">SHA-256 Manifest</tspan><tspan x="673.500000" dy="18.500000">Integrity Check</tspan></text></g><g class="ZGVmZW5zZXMuZnBfcGlu"><g class="shape" ><rect x="589.000000" y="266.000000" width="184.000000" height="82.000000" rx="6.000000" stroke="#047857" fill="#059669" style="stroke-width:2;" /></g><text x="681.000000" y="304.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px"><tspan x="681.000000" dy="0.000000">Fingerprint Pinning</tspan><tspan x="681.000000" dy="18.500000">in TRUST.json</tspan></text></g><g class="ZGVmZW5zZXMudHJ1c3Rfc2lnbg=="><g class="shape" ><rect x="589.000000" y="368.000000" width="207.000000" height="82.000000" rx="6.000000" stroke="#047857" fill="#059669" style="stroke-width:2;" /></g><text x="692.500000" y="406.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px"><tspan x="692.500000" dy="0.000000">Trust Store GPG</tspan><tspan x="692.500000" dy="18.500000">Signing + Immutability</tspan></text></g><g class="ZGVmZW5zZXMuaG9vaw=="><g class="shape" ><rect x="589.000000" y="470.000000" width="167.000000" height="82.000000" rx="6.000000" stroke="#047857" fill="#059669" style="stroke-width:2;" /></g><text x="672.500000" y="508.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px"><tspan x="672.500000" dy="0.000000">PreToolUse Hook</tspan><tspan x="672.500000" dy="18.500000">Fail-Closed</tspan></text></g><g class="ZGVmZW5zZXMuaHR0cHNfZnA="><g class="shape" ><rect x="589.000000" y="572.000000" width="189.000000" height="82.000000" rx="6.000000" stroke="#047857" fill="#059669" style="stroke-width:2;" /></g><text x="683.500000" y="610.500000" fill="#ffffff" class="text-bold" style="text-anchor:middle;font-size:16px"><tspan x="683.500000" dy="0.000000">HTTPS + Fingerprint</tspan><tspan x="683.500000" dy="18.500000">Verification</tspan></text></g><g class="KGF0dGFja3MuZm9yZ2VyeSAtJmd0OyBkZWZlbnNlcy5ncGdfc2lnKVswXQ=="><marker id="mk-d2-3592939932-952991474" markerWidth="13.000000" markerHeight="16.000000" refX="8.500000" refY="8.000000" viewBox="0.000000 0.000000 13.000000 16.000000" orient="auto" markerUnits="userSpaceOnUse"> <polygon points="0.000000,0.000000 13.000000,8.000000 0.000000,16.000000" fill="#059669" class="connection" stroke-width="3" /> </marker><path d="M 244.500000 111.000000 L 583.500000 111.000000" stroke="#059669" fill="none" class="connection" style="stroke-width:3;" marker-end="url(#mk-d2-3592939932-952991474)" mask="url(#d2-3592939932)" /><text x="415.500000" y="117.000000" fill="#059669" class="text-bold" style="text-anchor:middle;font-size:16px">blocked by</text></g><g class="KGF0dGFja3MudGFtcGVyIC0mZ3Q7IGRlZmVuc2VzLm1hbmlmZXN0KVswXQ=="><path d="M 244.500000 209.000000 L 583.500000 209.000000" stroke="#059669" fill="none" class="connection" style="stroke-width:3;" marker-end="url(#mk-d2-3592939932-952991474)" mask="url(#d2-3592939932)" /><text x="415.500000" y="215.000000" fill="#059669" class="text-bold" style="text-anchor:middle;font-size:16px">blocked by</text></g><g class="KGF0dGFja3Mua2V5X3N1YiAtJmd0OyBkZWZlbnNlcy5mcF9waW4pWzBd"><path d="M 244.500000 307.000000 L 583.500000 307.000000" stroke="#059669" fill="none" class="connection" style="stroke-width:3;" marker-end="url(#mk-d2-3592939932-952991474)" mask="url(#d2-3592939932)" /><text x="415.500000" y="313.000000" fill="#059669" class="text-bold" style="text-anchor:middle;font-size:16px">blocked by</text></g><g class="KGF0dGFja3MudHJ1c3RfcG9pc29uIC0mZ3Q7IGRlZmVuc2VzLnRydXN0X3NpZ24pWzBd"><path d="M 244.500000 409.000000 L 583.500000 409.000000" stroke="#059669" fill="none" class="connection" style="stroke-width:3;" marker-end="url(#mk-d2-3592939932-952991474)" mask="url(#d2-3592939932)" /><text x="415.500000" y="415.000000" fill="#059669" class="text-bold" style="text-anchor:middle;font-size:16px">blocked by</text></g><g class="KGF0dGFja3Muc29jaWFsIC0mZ3Q7IGRlZmVuc2VzLmhvb2spWzBd"><path d="M 244.500000 511.000000 L 583.500000 511.000000" stroke="#059669" fill="none" class="connection" style="stroke-width:3;" marker-end="url(#mk-d2-3592939932-952991474)" mask="url(#d2-3592939932)" /><text x="415.500000" y="517.000000" fill="#059669" class="text-bold" style="text-anchor:middle;font-size:16px">blocked by</text></g><g class="KGF0dGFja3MubWl0bSAtJmd0OyBkZWZlbnNlcy5odHRwc19mcClbMF0="><path d="M 244.500000 609.000000 L 583.500000 609.000000" stroke="#059669" fill="none" class="connection" style="stroke-width:3;" marker-end="url(#mk-d2-3592939932-952991474)" mask="url(#d2-3592939932)" /><text x="415.500000" y="615.000000" fill="#059669" class="text-bold" style="text-anchor:middle;font-size:16px">blocked by</text></g><mask id="d2-3592939932" maskUnits="userSpaceOnUse" x="-89" y="-89" width="1036" height="894">
-<rect x="-89" y="-89" width="1036" height="894" fill="white"></rect>
-<rect x="375.000000" y="101.000000" width="81" height="21" fill="black"></rect>
-<rect x="375.000000" y="199.000000" width="81" height="21" fill="black"></rect>
-<rect x="375.000000" y="297.000000" width="81" height="21" fill="black"></rect>
-<rect x="375.000000" y="399.000000" width="81" height="21" fill="black"></rect>
-<rect x="375.000000" y="501.000000" width="81" height="21" fill="black"></rect>
-<rect x="375.000000" y="599.000000" width="81" height="21" fill="black"></rect>
-</mask></svg></svg>
+  <rect width="900" height="550" fill="#FAFAF9" rx="0"/>
+
+  <!-- Title -->
+  <text x="450" y="34" text-anchor="middle" font-size="18" font-weight="700" fill="#1E293B" letter-spacing="0.5">Threat Model</text>
+  <rect x="300" y="42" width="300" height="1.5" fill="url(#hdr)" rx="1"/>
+  <text x="450" y="60" text-anchor="middle" font-size="12" fill="#64748B">Attack vectors mapped to SkillSeal defense mechanisms</text>
+
+  <!-- Column headers -->
+  <rect x="40" y="76" width="240" height="28" rx="4" fill="#FEF2F2"/>
+  <text x="160" y="95" text-anchor="middle" font-size="12" font-weight="700" fill="#991B1B" letter-spacing="1" text-transform="uppercase">ATTACK VECTORS</text>
+  <rect x="620" y="76" width="240" height="28" rx="4" fill="#F0FDF4"/>
+  <text x="740" y="95" text-anchor="middle" font-size="12" font-weight="700" fill="#065F46" letter-spacing="1">SKILLSEAL DEFENSES</text>
+
+  <!-- Row 1 -->
+  <rect x="40" y="116" width="240" height="52" rx="6" fill="#fff" stroke="#FECACA" filter="url(#s)"/>
+  <rect x="40" y="116" width="4" height="52" rx="2 0 0 2" fill="#DC2626"/>
+  <text x="56" y="138" font-size="11" fill="#64748B">1</text>
+  <text x="168" y="147" text-anchor="middle" font-size="13" font-weight="600" fill="#1E293B">Skill Forgery</text>
+
+  <line x1="288" y1="142" x2="612" y2="142" stroke="#10B981" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arr)"/>
+  <rect x="404" y="131" width="92" height="18" rx="9" fill="#ECFDF5"/>
+  <text x="450" y="143" text-anchor="middle" font-size="10" fill="#059669" font-weight="600">blocked by</text>
+
+  <rect x="620" y="116" width="240" height="52" rx="6" fill="#fff" stroke="#BBF7D0" filter="url(#s)"/>
+  <rect x="856" y="116" width="4" height="52" rx="0 2 2 0" fill="#059669"/>
+  <text x="740" y="147" text-anchor="middle" font-size="13" font-weight="600" fill="#1E293B">GPG Signature Verification</text>
+
+  <!-- Row 2 -->
+  <rect x="40" y="184" width="240" height="52" rx="6" fill="#fff" stroke="#FECACA" filter="url(#s)"/>
+  <rect x="40" y="184" width="4" height="52" rx="2 0 0 2" fill="#DC2626"/>
+  <text x="56" y="206" font-size="11" fill="#64748B">2</text>
+  <text x="168" y="213" text-anchor="middle" font-size="13" font-weight="600" fill="#1E293B">Post-Publication Tampering</text>
+
+  <line x1="288" y1="210" x2="612" y2="210" stroke="#10B981" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arr)"/>
+  <rect x="404" y="199" width="92" height="18" rx="9" fill="#ECFDF5"/>
+  <text x="450" y="211" text-anchor="middle" font-size="10" fill="#059669" font-weight="600">blocked by</text>
+
+  <rect x="620" y="184" width="240" height="52" rx="6" fill="#fff" stroke="#BBF7D0" filter="url(#s)"/>
+  <rect x="856" y="184" width="4" height="52" rx="0 2 2 0" fill="#059669"/>
+  <text x="740" y="207" text-anchor="middle" font-size="12" font-weight="600" fill="#1E293B">SHA-256 Manifest</text>
+  <text x="740" y="221" text-anchor="middle" font-size="12" font-weight="600" fill="#1E293B">Integrity Check</text>
+
+  <!-- Row 3 -->
+  <rect x="40" y="252" width="240" height="52" rx="6" fill="#fff" stroke="#FECACA" filter="url(#s)"/>
+  <rect x="40" y="252" width="4" height="52" rx="2 0 0 2" fill="#DC2626"/>
+  <text x="56" y="274" font-size="11" fill="#64748B">3</text>
+  <text x="168" y="283" text-anchor="middle" font-size="13" font-weight="600" fill="#1E293B">Key Substitution</text>
+
+  <line x1="288" y1="278" x2="612" y2="278" stroke="#10B981" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arr)"/>
+  <rect x="404" y="267" width="92" height="18" rx="9" fill="#ECFDF5"/>
+  <text x="450" y="279" text-anchor="middle" font-size="10" fill="#059669" font-weight="600">blocked by</text>
+
+  <rect x="620" y="252" width="240" height="52" rx="6" fill="#fff" stroke="#BBF7D0" filter="url(#s)"/>
+  <rect x="856" y="252" width="4" height="52" rx="0 2 2 0" fill="#059669"/>
+  <text x="740" y="275" text-anchor="middle" font-size="12" font-weight="600" fill="#1E293B">Fingerprint Pinning</text>
+  <text x="740" y="289" text-anchor="middle" font-size="12" font-weight="600" fill="#1E293B">in TRUST.json</text>
+
+  <!-- Row 4 -->
+  <rect x="40" y="320" width="240" height="52" rx="6" fill="#fff" stroke="#FECACA" filter="url(#s)"/>
+  <rect x="40" y="320" width="4" height="52" rx="2 0 0 2" fill="#DC2626"/>
+  <text x="56" y="342" font-size="11" fill="#64748B">4</text>
+  <text x="168" y="351" text-anchor="middle" font-size="13" font-weight="600" fill="#1E293B">Trust Store Poisoning</text>
+
+  <line x1="288" y1="346" x2="612" y2="346" stroke="#10B981" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arr)"/>
+  <rect x="404" y="335" width="92" height="18" rx="9" fill="#ECFDF5"/>
+  <text x="450" y="347" text-anchor="middle" font-size="10" fill="#059669" font-weight="600">blocked by</text>
+
+  <rect x="620" y="320" width="240" height="52" rx="6" fill="#fff" stroke="#BBF7D0" filter="url(#s)"/>
+  <rect x="856" y="320" width="4" height="52" rx="0 2 2 0" fill="#059669"/>
+  <text x="740" y="343" text-anchor="middle" font-size="12" font-weight="600" fill="#1E293B">Trust Store GPG Signing</text>
+  <text x="740" y="357" text-anchor="middle" font-size="12" font-weight="600" fill="#1E293B">+ Immutability</text>
+
+  <!-- Row 5 -->
+  <rect x="40" y="388" width="240" height="52" rx="6" fill="#fff" stroke="#FECACA" filter="url(#s)"/>
+  <rect x="40" y="388" width="4" height="52" rx="2 0 0 2" fill="#DC2626"/>
+  <text x="56" y="410" font-size="11" fill="#64748B">5</text>
+  <text x="168" y="419" text-anchor="middle" font-size="13" font-weight="600" fill="#1E293B">LLM Social Engineering</text>
+
+  <line x1="288" y1="414" x2="612" y2="414" stroke="#10B981" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arr)"/>
+  <rect x="404" y="403" width="92" height="18" rx="9" fill="#ECFDF5"/>
+  <text x="450" y="415" text-anchor="middle" font-size="10" fill="#059669" font-weight="600">blocked by</text>
+
+  <rect x="620" y="388" width="240" height="52" rx="6" fill="#fff" stroke="#BBF7D0" filter="url(#s)"/>
+  <rect x="856" y="388" width="4" height="52" rx="0 2 2 0" fill="#059669"/>
+  <text x="740" y="411" text-anchor="middle" font-size="12" font-weight="600" fill="#1E293B">PreToolUse Hook</text>
+  <text x="740" y="425" text-anchor="middle" font-size="12" font-weight="600" fill="#1E293B">Fail-Closed</text>
+
+  <!-- Row 6 -->
+  <rect x="40" y="456" width="240" height="52" rx="6" fill="#fff" stroke="#FECACA" filter="url(#s)"/>
+  <rect x="40" y="456" width="4" height="52" rx="2 0 0 2" fill="#DC2626"/>
+  <text x="56" y="478" font-size="11" fill="#64748B">6</text>
+  <text x="168" y="487" text-anchor="middle" font-size="13" font-weight="600" fill="#1E293B">MITM Key Fetch</text>
+
+  <line x1="288" y1="482" x2="612" y2="482" stroke="#10B981" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arr)"/>
+  <rect x="404" y="471" width="92" height="18" rx="9" fill="#ECFDF5"/>
+  <text x="450" y="483" text-anchor="middle" font-size="10" fill="#059669" font-weight="600">blocked by</text>
+
+  <rect x="620" y="456" width="240" height="52" rx="6" fill="#fff" stroke="#BBF7D0" filter="url(#s)"/>
+  <rect x="856" y="456" width="4" height="52" rx="0 2 2 0" fill="#059669"/>
+  <text x="740" y="479" text-anchor="middle" font-size="12" font-weight="600" fill="#1E293B">HTTPS + Fingerprint</text>
+  <text x="740" y="493" text-anchor="middle" font-size="12" font-weight="600" fill="#1E293B">Verification</text>
+
+  <!-- Footer -->
+  <text x="450" y="536" text-anchor="middle" font-size="10" fill="#94A3B8">SkillSeal  ·  Cryptographic Trust for LLM Agent Skills</text>
+</svg>

@@ -371,6 +371,12 @@ SKILL BLOCKED: "malicious-skill" failed SkillSeal verification
 - The trust store must have the authors added (`skillseal trust add <fingerprint>`)
 - Bun must be installed (the hook runs via `bun run`)
 
+## Roadmap
+
+- [ ] **Compiled binary distribution** — `bun build --compile` for standalone binaries (no Bun runtime needed). GPG-signed releases on GitHub. Binary is harder for agents/attackers to subtly modify compared to source files.
+- [ ] **SSH signing support** — Ed25519 SSH keys alongside GPG, for interop with projects using git SSH signing (e.g., The Hive protocol)
+- [ ] **Key revocation** — Mechanism to invalidate compromised keys
+
 ## Specifications
 
 - [Signature Format](spec/signature-format.md)
