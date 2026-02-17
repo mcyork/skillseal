@@ -19,7 +19,7 @@ import type { TrustJson } from "../src/lib/verify";
 
 function makeStore(overrides?: Partial<TrustStore>): TrustStore {
   return {
-    schema_version: "0.2.5",
+    schema_version: "0.2.6",
     trusted_authors: {},
     trusted_reviewers: {},
     policies: {
@@ -359,12 +359,12 @@ describe("evaluatePolicy", () => {
       expect(result.action).toBe("allow");
     });
 
-    test("destatement from trusted reviewer with wildcard override (skill='*') bypasses destatement", () => {
+    test("destatement from trusted reviewer with 'all' override bypasses destatement", () => {
       const store = makeStore({
         trusted_authors: { alice: makeEntity(authorFp) },
         trusted_reviewers: { secbot: makeEntity(reviewerFp, "reviewer") },
         overrides: [
-          { skill: "*", despite: "secbot", reason: "Global override for secbot" },
+          { skill: "all", despite: "secbot", reason: "Global override for secbot" },
         ],
       });
       const trust = makeTrust("alice", authorFp);

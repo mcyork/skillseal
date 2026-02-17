@@ -1,6 +1,6 @@
 // SkillSeal — key cache
 // Caches fetched GPG and SSH keys locally for offline verification
-// v0.2.5: Cache never expires — refreshes opportunistically when online
+// v0.2.6: Cache never expires — refreshes opportunistically when online
 
 import { join } from "node:path";
 import { homedir } from "node:os";

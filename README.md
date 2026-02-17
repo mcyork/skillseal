@@ -204,7 +204,7 @@ The trust metadata file records the author's identity and all signing keys:
 
 ```json
 {
-  "schema_version": "0.2.5",
+  "schema_version": "0.2.6",
   "author": {
     "name": "Ian McCutcheon",
     "email": "",
@@ -553,7 +553,7 @@ The block message shows what happened (policy, who flagged it, why) without sugg
 
 ## Roadmap
 
-**Shipped (v0.2.5):**
+**Shipped (v0.2.6):**
 
 - [x] **SSH signing support** — Ed25519 SSH keys alongside GPG
 - [x] **Multi-key signing** — Sign with multiple keys simultaneously via pluggable provider architecture

@@ -1,6 +1,6 @@
 # SkillSeal Trust Store Format Specification
 
-**Status:** v0.2.5
+**Status:** v0.2.6
 
 ## Overview
 
@@ -34,7 +34,7 @@ This prevents direct file edits from being accepted. However, if the signing key
 
 ```json
 {
-  "schema_version": "0.2.5",
+  "schema_version": "0.2.6",
   "trusted_authors": {
     "github-username": {
       "keys": [
@@ -90,7 +90,7 @@ This prevents direct file edits from being accepted. However, if the signing key
 
 ### `schema_version`
 
-String. The version of the trust store schema. Current version: `"0.2.5"`.
+String. The version of the trust store schema. Current version: `"0.2.6"`.
 
 ### `trusted_authors`
 

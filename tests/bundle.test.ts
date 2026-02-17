@@ -1,4 +1,4 @@
-// SkillSeal v0.2.5 — trust bundle application tests
+// SkillSeal v0.2.6 — trust bundle application tests
 
 import { test, expect, describe } from "bun:test";
 import { applyBundle } from "../src/lib/bundle";
@@ -7,7 +7,7 @@ import type { TrustBundleData } from "../src/lib/bundle";
 
 function makeStore(overrides?: Partial<TrustStore>): TrustStore {
   return {
-    schema_version: "0.2.5",
+    schema_version: "0.2.6",
     trusted_authors: {},
     trusted_reviewers: {},
     policies: {
