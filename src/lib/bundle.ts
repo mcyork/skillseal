@@ -105,24 +105,68 @@ export function applyBundle(data: TrustBundleData, store: TrustStore): {
   let addedReviewers = 0;
   let revokedKeys = 0;
 
+  // Persist revoked fingerprints in the store
+  if (!store.revoked_fingerprints) store.revoked_fingerprints = [];
+  if (data.revoked_fingerprints) {
+    for (const fp of data.revoked_fingerprints) {
+      const normalized = fp.toUpperCase().replace(/\s/g, "");
+      if (!store.revoked_fingerprints.includes(normalized)) {
+        store.revoked_fingerprints.push(normalized);
+      }
+    }
+  }
+
+  // Merge authors — add new keys, filter out revoked
   for (const [github, entity] of Object.entries(data.trusted_authors)) {
-    if (!store.trusted_authors[github]) {
+    // Filter out revoked keys before adding
+    entity.keys = entity.keys.filter(
+      (k) => !store.revoked_fingerprints!.includes(k.fingerprint.toUpperCase().replace(/\s/g, ""))
+    );
+
+    if (store.trusted_authors[github]) {
+      // Merge: add any new keys not already present
+      const existing = store.trusted_authors[github];
+      for (const newKey of entity.keys) {
+        const normalized = newKey.fingerprint.toUpperCase().replace(/\s/g, "");
+        const exists = existing.keys.some(
+          (k) => k.fingerprint.toUpperCase().replace(/\s/g, "") === normalized
+        );
+        if (!exists) {
+          existing.keys.push(newKey);
+        }
+      }
+    } else if (entity.keys.length > 0) {
       store.trusted_authors[github] = entity;
       addedAuthors++;
     }
   }
 
+  // Merge reviewers — add new keys, filter out revoked
   for (const [github, entity] of Object.entries(data.trusted_reviewers)) {
-    if (!store.trusted_reviewers[github]) {
+    entity.keys = entity.keys.filter(
+      (k) => !store.revoked_fingerprints!.includes(k.fingerprint.toUpperCase().replace(/\s/g, ""))
+    );
+
+    if (store.trusted_reviewers[github]) {
+      const existing = store.trusted_reviewers[github];
+      for (const newKey of entity.keys) {
+        const normalized = newKey.fingerprint.toUpperCase().replace(/\s/g, "");
+        const exists = existing.keys.some(
+          (k) => k.fingerprint.toUpperCase().replace(/\s/g, "") === normalized
+        );
+        if (!exists) {
+          existing.keys.push(newKey);
+        }
+      }
+    } else if (entity.keys.length > 0) {
       store.trusted_reviewers[github] = entity;
       addedReviewers++;
     }
   }
 
-  if (data.revoked_fingerprints && data.revoked_fingerprints.length > 0) {
-    const revokedSet = new Set(
-      data.revoked_fingerprints.map((fp) => fp.toUpperCase().replace(/\s/g, ""))
-    );
+  // Revoke keys from existing store entries
+  if (store.revoked_fingerprints.length > 0) {
+    const revokedSet = new Set(store.revoked_fingerprints);
 
     for (const entities of [store.trusted_authors, store.trusted_reviewers]) {
       for (const [github, entity] of Object.entries(entities)) {

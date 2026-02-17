@@ -26,7 +26,7 @@ SkillSeal provides a lightweight signing framework for skill packages and plugin
 |-----------|---------|
 | `skillseal sign <dir>` | Sign a skill or plugin with all configured keys |
 | `skillseal verify <dir>` | Verify a skill or plugin (one valid signature suffices) |
-| `skillseal sign-all <dir>` | Sign all skills and plugins in a directory |
+| `skillseal sign-all <dir> [--max-depth N]` | Sign all skills and plugins in a directory (default depth: 3) |
 | `skillseal attest <dir>` | Create a multi-key attestation bundle for a skill |
 | `skillseal init <dir>` | Scaffold a new skill package |
 | `skillseal trust <cmd>` | Manage trust store (add, remove, list, set-policy, override, bundle) |
@@ -477,6 +477,8 @@ On update, SkillSeal fetches the bundle from GitHub, verifies the publisher's si
 
 Policies are configured in `~/.skillseal/trust-store.json`. The PreToolUse hook treats both `prompt` and `refuse` as block — hooks can't prompt interactively.
 
+**Policy weakening protection:** Changing a policy to a less restrictive action (e.g., `refuse` → `prompt`, or `prompt` → `allow`) requires the `--yes` flag to confirm. This prevents accidental weakening of trust policies.
+
 ## Enforcement: PreToolUse Hook
 
 Signing and verification are only useful if you actually enforce them. SkillSeal ships a [PreToolUse hook](hooks/skill-verify.ts) for Claude Code that blocks any skill from executing unless it passes `skillseal verify`.
@@ -562,6 +564,7 @@ The block message shows what happened (policy, who flagged it, why) without sugg
 - [x] **Trust bundles** — Subscribe to community-curated lists of trusted authors and reviewers
 - [x] **Key cache** — Offline verification via locally cached public keys
 - [x] **GPG revocation detection** — Revoked GPG keys are detected before signature verification
+- [x] **Trust bundle revocation lists** — Trust bundles include `revoked_fingerprints` to block compromised keys
 - [x] **HEAD probe** — Liveness check for local attestations against reviewer's remote repository
 
 **Near-term:**

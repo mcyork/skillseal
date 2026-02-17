@@ -5,7 +5,7 @@ author: ian@esoup.net
 github: mcyork
 signed: true
 attestations: []
-manifest_hash: sha256:d7280095942fab81154dbd65abbd95697d363b35d67fd109511bb2419f6a2227
+manifest_hash: sha256:01460abfec54b36f9eff7155576771b82645170942b8cef28fa3ad4e0f7d6d33
 ---
 
 # SkillSeal Verify

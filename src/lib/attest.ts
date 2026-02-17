@@ -40,6 +40,7 @@ export interface AttestationReviewer {
 
 export interface AttestationStatement {
   type: "https://skillseal.dev/attestation/review/v1";
+  created_at?: string;
   subject: AttestationSubject;
   reviewer: AttestationReviewer;
   attestation: {
@@ -130,10 +131,8 @@ function parseFrontmatter(content: string): FrontmatterData | null {
     const colonIdx = line.indexOf(":");
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
-    let value: string | boolean = line.slice(colonIdx + 1).trim();
-    if (value === "true") value = true as unknown as string;
-    else if (value === "false") value = false as unknown as string;
-    else if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    let value: string = line.slice(colonIdx + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
     result[key] = value;
@@ -185,6 +184,8 @@ async function getGitRemoteUrl(dir: string): Promise<string | null> {
 // Create attestation statement
 // ---------------------------------------------------------------------------
 
+const MAX_STATEMENT_LENGTH = 4096;
+
 export async function createAttestationStatement(
   skillDir: string,
   reviewer: AttestationReviewer,
@@ -192,6 +193,10 @@ export async function createAttestationStatement(
   statementText: string,
   verdict: "approve" | "reject" = "approve"
 ): Promise<AttestationStatement> {
+  if (statementText.length > MAX_STATEMENT_LENGTH) {
+    throw new Error(`Statement text is ${statementText.length} characters (maximum ${MAX_STATEMENT_LENGTH})`);
+  }
+
   const manifestPath = join(skillDir, "MANIFEST.json");
   const plugin = await isPlugin(skillDir);
 
@@ -222,7 +227,7 @@ export async function createAttestationStatement(
     const fm = parseFrontmatter(skillContent);
     skillName = fm?.name ? String(fm.name) : join(skillDir).split("/").pop() || "unknown";
     version = fm?.version ? String(fm.version) : "0.0.0";
-    isSigned = fm?.signed === true || String(fm?.signed) === "true";
+    isSigned = String(fm?.signed) === "true";
   }
 
   const hasManifest = await Bun.file(manifestPath).exists();
@@ -254,6 +259,7 @@ export async function createAttestationStatement(
 
   return {
     type: "https://skillseal.dev/attestation/review/v1",
+    created_at: new Date().toISOString(),
     subject,
     reviewer,
     attestation: {
@@ -554,7 +560,24 @@ export async function probeAttestationLiveness(
     const timeout = setTimeout(() => controller.abort(), 5_000);
     const response = await fetch(url, { method: "HEAD", signal: controller.signal });
     clearTimeout(timeout);
-    return { exists: response.ok, probeSkipped: false };
+
+    if (!response.ok) {
+      return { exists: false, probeSkipped: false };
+    }
+
+    // Validate response content-type
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/json") && !contentType.includes("text/plain") && !contentType.includes("application/octet-stream")) {
+      return { exists: false, probeSkipped: false };
+    }
+
+    // Validate content-length is non-zero if present
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && parseInt(contentLength, 10) === 0) {
+      return { exists: false, probeSkipped: false };
+    }
+
+    return { exists: true, probeSkipped: false };
   } catch {
     // Network error — don't block, skip probe
     return { exists: true, probeSkipped: true };

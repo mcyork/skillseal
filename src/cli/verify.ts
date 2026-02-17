@@ -14,6 +14,15 @@ import {
 import type { TrustJson, AttestationBundle, PluginVerifyResult, DestatementInfo } from "../lib";
 import { join, resolve, basename } from "node:path";
 
+/** Strip control characters and potential injection patterns from output text */
+function sanitizeForOutput(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<\/?[a-z][^>]*>/gi, "");
+}
+
 export async function verifyCommand(skillDir: string, extraArgs?: string[]): Promise<void> {
   const args = extraArgs || process.argv.slice(3);
 
@@ -215,7 +224,7 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
   console.log(`  Manifest:  ${result.manifestValid ? "VALID" : "INVALID"}`);
 
   if (result.author) {
-    console.log(`  Author:    ${result.author.name} (${result.author.github})`);
+    console.log(`  Author:    ${sanitizeForOutput(result.author.name)} (${sanitizeForOutput(result.author.github)})`);
     if (result.author.keys && result.author.keys.length > 0) {
       console.log(`  Keys:`);
       for (const key of result.author.keys) {
@@ -237,17 +246,17 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
       if (att.signatureValid) {
         const verdictLabel = att.verdict === "reject" ? " — REJECT" : "";
         console.log(
-          `    ${reviewer.github} (${reviewer.name}): ${sigStatus} [${scope}] (v${version} — ${freshness})${verdictLabel}`
+          `    ${sanitizeForOutput(reviewer.github)} (${sanitizeForOutput(reviewer.name)}): ${sigStatus} [${sanitizeForOutput(scope)}] (v${sanitizeForOutput(version)} — ${freshness})${verdictLabel}`
         );
       } else {
         console.log(
-          `    ${reviewer.github} (${reviewer.name}): SIG ${sigStatus}`
+          `    ${sanitizeForOutput(reviewer.github)} (${sanitizeForOutput(reviewer.name)}): SIG ${sigStatus}`
         );
       }
 
       if (att.errors.length > 0) {
         for (const e of att.errors) {
-          console.log(`      Error: ${e}`);
+          console.log(`      Error: ${sanitizeForOutput(e)}`);
         }
       }
     }
@@ -256,14 +265,14 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
   if (result.warnings.length > 0) {
     console.log("\n  Warnings:");
     for (const w of result.warnings) {
-      console.log(`    - ${w}`);
+      console.log(`    - ${sanitizeForOutput(w)}`);
     }
   }
 
   if (result.errors.length > 0) {
     console.log("\n  Errors:");
     for (const e of result.errors) {
-      console.log(`    - ${e}`);
+      console.log(`    - ${sanitizeForOutput(e)}`);
     }
   }
 
@@ -271,9 +280,9 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
     console.log(`\n  Trust policy: ${policy.scenario} -> ${policy.action}`);
     if (policy.destatement) {
       console.log(`  Destatement:`);
-      console.log(`    Flagged by: ${policy.destatement.reviewer}`);
-      console.log(`    Reason: ${policy.destatement.reason}`);
-      console.log(`    Date: ${policy.destatement.date}`);
+      console.log(`    Flagged by: ${sanitizeForOutput(policy.destatement.reviewer)}`);
+      console.log(`    Reason: ${sanitizeForOutput(policy.destatement.reason)}`);
+      console.log(`    Date: ${sanitizeForOutput(policy.destatement.date)}`);
     }
   }
 

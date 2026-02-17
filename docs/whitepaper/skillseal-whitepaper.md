@@ -336,7 +336,7 @@ Supported GPG key types: RSA (2048+ bit), Ed25519, Ed448. Supported SSH key type
 Author public keys are discovered through GitHub's existing key endpoints:
 
 - **GPG keys:** `https://github.com/{username}.gpg`
-- **SSH signing keys:** `https://api.github.com/users/{username}/ssh_signing_keys` (filtered by keys with title containing "SkillSeal")
+- **SSH signing keys:** `https://api.github.com/users/{username}/ssh_signing_keys` (filtered by keys with title exactly matching "skillseal", case-insensitive)
 
 This requires no custom infrastructure. Developers who sign git commits already have keys published here. For SSH, SkillSeal validates key strength (minimum 128-bit security) and filters for keys explicitly designated for SkillSeal use.
 
@@ -576,6 +576,7 @@ An attestation bundle is a JSON file with the extension `.attestation.json`:
         "manifest_sha256": "504861f3a997aa1c..."
       }
     },
+    "created_at": "2026-02-15T01:13:34.774Z",
     "reviewer": {
       "name": "Ian McCutcheon",
       "github": "mcyork",
@@ -861,12 +862,16 @@ All hash and fingerprint comparisons in SkillSeal use constant-time comparison v
 import { timingSafeEqual } from "node:crypto";
 
 function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  const maxLen = Math.max(a.length, b.length);
+  const bufA = Buffer.alloc(maxLen);
+  const bufB = Buffer.alloc(maxLen);
+  bufA.write(a);
+  bufB.write(b);
+  return timingSafeEqual(bufA, bufB) && a.length === b.length;
 }
 ```
 
-While timing attacks against local hash comparisons have limited practical impact, this eliminates the vector entirely — particularly relevant for enterprise proxy deployments where comparisons may occur over a network boundary.
+Both inputs are padded to equal length before comparison, ensuring `timingSafeEqual()` always receives same-length buffers. The length check is performed after the constant-time comparison to avoid leaking length information through early return. While timing attacks against local hash comparisons have limited practical impact, this eliminates the vector entirely — particularly relevant for enterprise proxy deployments where comparisons may occur over a network boundary.
 
 ## Input Validation
 
@@ -881,13 +886,13 @@ Verification uses `Bun.spawn()` with array-style argument passing (exec-style, n
 
 ## Known Limitations
 
-**No key revocation.** If an author's key is compromised, the attacker can produce valid signatures until the key is removed from GitHub. Fingerprint pinning prevents key substitution but not compromise of the original key. A revocation list in the trust store is planned.
+**Key revocation is trust-store scoped.** Trust bundles support a `revoked_fingerprints` list that prevents verification of signatures from compromised keys. However, revocation is per-trust-store — there is no global revocation broadcast. If an author's key is compromised, each trust store must independently add the fingerprint to its revocation list. GPG-level revocation is also detected (see GPG Revocation Detection above).
 
 **GitHub as single key source.** Key discovery depends on GitHub's availability and integrity. Fingerprint pinning mitigates key substitution but not a complete GitHub outage (verification fails, which is the fail-closed behavior).
 
 **Minimal YAML parser.** The frontmatter parser handles single-line `key: value` pairs. Complex YAML constructs (multi-line values, anchors, aliases) are not supported. This is a deliberate constraint — the frontmatter format is restricted.
 
-**TOCTOU in trust store operations.** Concurrent processes modifying the trust store can race. For read-only verification this is not a concern; write operations should use file locking in production deployments.
+**Advisory locking for trust store writes.** Trust store write operations use advisory file locking (`wx` exclusive-create flag) to prevent concurrent modification. This is cooperative — processes that bypass SkillSeal's APIs can still race. For read-only verification this is not a concern.
 
 ## Key Cache
 

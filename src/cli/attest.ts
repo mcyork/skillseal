@@ -72,6 +72,10 @@ export async function attestCommand(args: string[]): Promise<void> {
           console.error("Error: --statement requires a value");
           process.exit(1);
         }
+        if (args[i].length > 4096) {
+          console.error(`Error: --statement text is ${args[i].length} characters (maximum 4096)`);
+          process.exit(1);
+        }
         statementText = args[i];
         break;
       case "--reject":

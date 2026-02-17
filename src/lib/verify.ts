@@ -73,10 +73,8 @@ function parseFrontmatter(content: string): FrontmatterData | null {
     const colonIdx = line.indexOf(":");
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
-    let value: string | boolean = line.slice(colonIdx + 1).trim();
-    if (value === "true") value = true as unknown as string;
-    else if (value === "false") value = false as unknown as string;
-    else if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    let value: string = line.slice(colonIdx + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
     result[key] = value;
@@ -129,10 +127,16 @@ export async function verifySkill(
   let manifestValid = false;
   const attestationResults: AttestationResult[] = [];
 
-  // 1. Read TRUST.json
+  // 0. Read ALL files upfront to prevent TOCTOU race conditions
   const trustPath = join(skillDir, "TRUST.json");
-  const trustFile = Bun.file(trustPath);
-  const hasTrustJson = await trustFile.exists();
+  const skillMdPath = join(skillDir, "SKILL.md");
+  const manifestPath = join(skillDir, "MANIFEST.json");
+  const trustContent = await Bun.file(trustPath).text().catch(() => null);
+  const skillMdContent = await Bun.file(skillMdPath).text().catch(() => null);
+  const manifestContent = await Bun.file(manifestPath).text().catch(() => null);
+
+  // 1. Read TRUST.json
+  const hasTrustJson = trustContent !== null;
 
   if (!hasTrustJson) {
     const hasAttestations =
@@ -174,7 +178,7 @@ export async function verifySkill(
 
   let trust: TrustJson;
   try {
-    trust = await trustFile.json();
+    trust = JSON.parse(trustContent!);
   } catch {
     return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json is not valid JSON"], warnings, attestations: [] };
   }
@@ -185,13 +189,19 @@ export async function verifySkill(
   if (!trust.author.github || typeof trust.author.github !== "string") {
     return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing valid author.github field"], warnings, attestations: [] };
   }
+  // Migrate legacy TRUST.json: flat author.fingerprint → author.keys[]
+  if ((!trust.author.keys || !Array.isArray(trust.author.keys) || trust.author.keys.length === 0) && (trust.author as any).fingerprint) {
+    const fp = (trust.author as any).fingerprint as string;
+    const legacyType = fp.startsWith("SHA256:") ? "ssh" : "gpg";
+    trust.author.keys = [{ type: legacyType, fingerprint: fp, key_url: (trust.author as any).key_url || "" }];
+    warnings.push("TRUST.json uses legacy schema (flat fingerprint) — re-sign to upgrade");
+  }
   if (!trust.author.keys || !Array.isArray(trust.author.keys) || trust.author.keys.length === 0) {
     return { valid: false, signatureValid: false, manifestValid: false, errors: ["TRUST.json missing valid author.keys array"], warnings, attestations: [] };
   }
 
   // 2. Check SKILL.md exists
-  const skillMdPath = join(skillDir, "SKILL.md");
-  if (!(await Bun.file(skillMdPath).exists())) {
+  if (skillMdContent === null) {
     errors.push("SKILL.md not found");
     return { valid: false, signatureValid, manifestValid, author: trust.author, errors, warnings, attestations: [] };
   }
@@ -211,30 +221,37 @@ export async function verifySkill(
       continue;
     }
 
-    // Find matching key in TRUST.json
-    const matchingKey = trust.author.keys.find((k) => k.type === sig.type);
-    if (!matchingKey) {
+    // Find all matching keys in TRUST.json for this signature type
+    const matchingKeys = trust.author.keys.filter((k) => k.type === sig.type);
+    if (matchingKeys.length === 0) {
       warnings.push(`Signature type ${sig.type} has no matching key in TRUST.json`);
       continue;
     }
 
-    const result = await provider.verifyFile(
-      skillMdPath,
-      sig.sigPath,
-      trust.author.github,
-      matchingKey.fingerprint,
-    );
+    let keyVerified = false;
+    for (const matchingKey of matchingKeys) {
+      const result = await provider.verifyFile(
+        skillMdPath,
+        sig.sigPath,
+        trust.author.github,
+        matchingKey.fingerprint,
+      );
 
-    warnings.push(...result.warnings);
+      warnings.push(...result.warnings);
 
-    if (result.valid) {
+      if (result.valid) {
+        keyVerified = true;
+        break;
+      } else {
+        for (const err of result.errors) {
+          warnings.push(`${sig.type} signature: ${err}`);
+        }
+      }
+    }
+
+    if (keyVerified) {
       signatureValid = true;
       break; // One valid signature is sufficient
-    } else {
-      // Collect errors but keep trying other signatures
-      for (const err of result.errors) {
-        warnings.push(`${sig.type} signature: ${err}`);
-      }
     }
   }
 
@@ -243,8 +260,7 @@ export async function verifySkill(
   }
 
   // 5. Verify manifest integrity
-  const manifestPath = join(skillDir, "MANIFEST.json");
-  if (await Bun.file(manifestPath).exists()) {
+  if (manifestContent !== null) {
     const manifestResult = await verifyManifest(skillDir);
     if (!manifestResult.valid) {
       for (const err of manifestResult.errors) {
@@ -254,8 +270,7 @@ export async function verifySkill(
       manifestValid = true;
     }
 
-    const skillMdContent = await Bun.file(skillMdPath).text();
-    const frontmatter = parseFrontmatter(skillMdContent);
+    const frontmatter = parseFrontmatter(skillMdContent!);
     if (frontmatter?.manifest_hash) {
       const currentHash = await hashManifest(skillDir);
       const fmHash = String(frontmatter.manifest_hash);
@@ -361,6 +376,13 @@ export async function verifyPlugin(
     };
   }
 
+  // Migrate legacy TRUST.json: flat author.fingerprint → author.keys[]
+  if (trust.author && (!trust.author.keys || !Array.isArray(trust.author.keys) || trust.author.keys.length === 0) && (trust.author as any).fingerprint) {
+    const fp = (trust.author as any).fingerprint as string;
+    const legacyType = fp.startsWith("SHA256:") ? "ssh" : "gpg";
+    trust.author.keys = [{ type: legacyType, fingerprint: fp, key_url: (trust.author as any).key_url || "" }];
+    warnings.push("TRUST.json uses legacy schema (flat fingerprint) — re-sign to upgrade");
+  }
   if (!trust.author?.github || !trust.author?.keys || trust.author.keys.length === 0) {
     return {
       valid: false, signatureValid: false, manifestValid: false,

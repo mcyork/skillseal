@@ -2,8 +2,10 @@
 // Walks a skill directory and produces MANIFEST.json with SHA-256 hashes
 
 import { timingSafeEqual } from "node:crypto";
-import { readdir } from "node:fs/promises";
+import { readdir, realpath } from "node:fs/promises";
 import { join, relative, posix } from "node:path";
+
+export const MANIFEST_SCHEMA_VERSION = "0.1.0";
 
 const EXCLUDED_NAMES = new Set(["SKILL.md", "MANIFEST.json", "TRUST.json"]);
 const EXCLUDED_DIRS = new Set(["ATTESTATIONS", "SIGNATURES", ".git", "node_modules"]);
@@ -71,6 +73,14 @@ async function walkDir(dir: string, root: string, options?: WalkOptions): Promis
       continue;
     }
 
+    // Check for symlinks escaping the skill directory
+    if (entry.isSymbolicLink()) {
+      const realPath = await realpath(fullPath);
+      if (!realPath.startsWith(root)) {
+        throw new Error(`Symlink escapes skill directory: ${relPath} -> ${realPath}`);
+      }
+    }
+
     if (entry.isDirectory()) {
       if (opts.excludedDirs.has(entry.name)) continue;
       const sub = await walkDir(fullPath, root, opts);
@@ -106,7 +116,7 @@ export async function generateManifest(skillDir: string, timestamp?: string, plu
   }
 
   return {
-    schema_version: "0.1.0",
+    schema_version: MANIFEST_SCHEMA_VERSION,
     generated_at: timestamp || new Date().toISOString(),
     algorithm: "sha256",
     files,

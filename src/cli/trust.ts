@@ -345,6 +345,17 @@ async function trustSetPolicy(args: string[]): Promise<void> {
 
   const store = await loadTrustStore();
   const previous = store.policies[scenario];
+
+  // FIX 4 (HIGH-10): Policy weakening requires explicit confirmation
+  const POLICY_STRENGTH: Record<string, number> = { refuse: 3, prompt: 2, allow: 1 };
+  const isWeakening = (POLICY_STRENGTH[action] || 0) < (POLICY_STRENGTH[previous] || 0);
+
+  if (isWeakening && !args.includes("--yes")) {
+    console.error(`WARNING: This weakens security policy for "${scenario}": ${previous} -> ${action}`);
+    console.error('Pass --yes to confirm policy weakening.');
+    process.exit(1);
+  }
+
   store.policies[scenario] = action;
   await saveTrustStore(store);
 
@@ -434,6 +445,12 @@ async function trustOverrideAdd(args: string[]): Promise<void> {
 
   if (!skill || !despite) {
     console.error('Usage: skillseal trust override add <skill> --despite <reviewer> [--reason "..."]');
+    process.exit(1);
+  }
+
+  // FIX 3 (HIGH-4): Reject wildcard "*" — use explicit skill names or "all"
+  if (skill === "*") {
+    console.error('Error: Wildcard "*" is not accepted. Use explicit skill names or "all" to override for all skills.');
     process.exit(1);
   }
 
@@ -543,6 +560,11 @@ async function trustBundleAdd(args: string[]): Promise<void> {
   const source = args[0];
   if (!source || !source.includes("/")) {
     console.error("Usage: skillseal trust bundle add <org/repo>");
+    process.exit(1);
+  }
+
+  if (!/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9._-]+$/.test(source)) {
+    console.error(`Invalid bundle source format: "${source}". Expected "owner/repo".`);
     process.exit(1);
   }
 

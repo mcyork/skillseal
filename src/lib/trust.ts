@@ -5,7 +5,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import type { TrustJson } from "./verify";
 import { getProvider } from "./providers";
 import { loadConfig, getConfigKeys } from "./config";
@@ -61,6 +61,7 @@ export interface TrustStore {
   policies: Record<PolicyScenario, PolicyAction>;
   overrides?: TrustStoreOverride[];
   bundles?: BundleSubscription[];
+  revoked_fingerprints?: string[];
 }
 
 const DEFAULT_POLICIES: Record<PolicyScenario, PolicyAction> = {
@@ -97,92 +98,139 @@ export async function loadTrustStore(): Promise<TrustStore> {
     return emptyStore();
   }
 
+  // FIX 6 (TOCTOU): Read file content ONCE, verify against it, then parse the same content
+  const storeContent = await file.text();
+
   // Check for at least one valid signature in the signatures dir
   // or fall back to the legacy single .sig file
   let verified = false;
 
-  // Try new SIGNATURES approach: trust-store.signatures/{type}.sig
-  try {
-    const { readdir: rd } = await import("node:fs/promises");
-    const entries = await rd(sigDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".sig")) continue;
-      const type = entry.name.replace(/\.sig$/, "");
-      const provider = getProvider(type);
-      if (!provider) continue;
+  // Write content to a temp file for GPG/SSH verification against the snapshot
+  const { mkdtemp: mkTmpDir } = await import("node:fs/promises");
+  const { tmpdir: osTmpdir } = await import("node:os");
+  const contentTmpDir = await mkTmpDir(join(osTmpdir(), "skillseal-verify-"));
+  const contentTmpPath = join(contentTmpDir, "trust-store.json");
+  await Bun.write(contentTmpPath, storeContent);
 
-      const sigPath = join(sigDir, entry.name);
-      // For trust store, we verify locally (no GitHub fetch needed)
-      // Use GPG local verify or SSH local verify
-      if (type === "gpg") {
-        const proc = Bun.spawn(
-          ["gpg", "--verify", "--", sigPath, storePath],
-          { stdout: "pipe", stderr: "pipe" }
-        );
-        if ((await proc.exited) === 0) {
-          verified = true;
-          break;
-        }
-      } else if (type === "ssh") {
-        const config = await loadConfig();
-        const sshKeys = getConfigKeys(config).filter(k => k.type === "ssh");
-        if (sshKeys.length > 0 && sshKeys[0].key_path) {
-          const pubKeyPath = sshKeys[0].key_path!.endsWith(".pub")
-            ? sshKeys[0].key_path!
-            : sshKeys[0].key_path! + ".pub";
-          const pubKeyFile = Bun.file(pubKeyPath);
-          if (await pubKeyFile.exists()) {
-            const pubKeyContent = await pubKeyFile.text();
-            const github = config.github || "skillseal";
-            const { mkdtemp, rm } = await import("node:fs/promises");
-            const { tmpdir } = await import("node:os");
-            const tmpDir = await mkdtemp(join(tmpdir(), "skillseal-ts-"));
+  try {
+    // Try new SIGNATURES approach: trust-store.signatures/{type}.sig
+    try {
+      const { readdir: rd } = await import("node:fs/promises");
+      const entries = await rd(sigDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith(".sig")) continue;
+        const type = entry.name.replace(/\.sig$/, "");
+        const provider = getProvider(type);
+        if (!provider) continue;
+
+        const sigPath = join(sigDir, entry.name);
+        // FIX 1 (CRIT-2): GPG verification uses isolated keyring with pinned keys
+        if (type === "gpg") {
+          const config = await loadConfig();
+          const gpgKeys = getConfigKeys(config).filter(k => k.type === "gpg");
+          for (const gpgKey of gpgKeys) {
+            if (!gpgKey.fingerprint) continue;
+            const gpgHome = await mkTmpDir(join(osTmpdir(), "skillseal-trust-gpg-"));
             try {
-              const allowedPath = join(tmpDir, "allowed_signers");
-              await Bun.write(allowedPath, `${github}@github.com ${pubKeyContent.trim()}\n`);
-              const fileContent = await Bun.file(storePath).arrayBuffer();
+              // Import the specific key into the isolated keyring
+              const recv = Bun.spawn(
+                ["gpg", "--homedir", gpgHome, "--keyserver", "hkps://keys.openpgp.org", "--recv-keys", gpgKey.fingerprint],
+                { stdout: "pipe", stderr: "pipe" }
+              );
+              await recv.exited;
               const proc = Bun.spawn(
-                ["ssh-keygen", "-Y", "verify", "-f", allowedPath, "-I", `${github}@github.com`, "-n", "skillseal", "-s", sigPath],
-                { stdin: new Uint8Array(fileContent), stdout: "pipe", stderr: "pipe" }
+                ["gpg", "--homedir", gpgHome, "--verify", "--", sigPath, contentTmpPath],
+                { stdout: "pipe", stderr: "pipe" }
               );
               if ((await proc.exited) === 0) {
                 verified = true;
                 break;
               }
             } finally {
-              const { rm: rmDir } = await import("node:fs/promises");
-              await rmDir(tmpDir, { recursive: true, force: true });
+              await rm(gpgHome, { recursive: true, force: true });
             }
+          }
+          if (verified) break;
+        } else if (type === "ssh") {
+          // FIX 5 (MED-8): Try ALL configured SSH keys, not just the first
+          const config = await loadConfig();
+          const sshKeys = getConfigKeys(config).filter(k => k.type === "ssh");
+          for (const sshKey of sshKeys) {
+            if (!sshKey.key_path) continue;
+            const pubKeyPath = sshKey.key_path.endsWith(".pub")
+              ? sshKey.key_path
+              : sshKey.key_path + ".pub";
+            const pubKeyFile = Bun.file(pubKeyPath);
+            if (!(await pubKeyFile.exists())) continue;
+            const pubKeyContent = await pubKeyFile.text();
+            const github = config.github || "skillseal";
+            const tmpDir = await mkTmpDir(join(osTmpdir(), "skillseal-ts-"));
+            try {
+              const allowedPath = join(tmpDir, "allowed_signers");
+              await Bun.write(allowedPath, `${github}@github.com ${pubKeyContent.trim()}\n`);
+              const proc = Bun.spawn(
+                ["ssh-keygen", "-Y", "verify", "-f", allowedPath, "-I", `${github}@github.com`, "-n", "skillseal", "-s", sigPath],
+                { stdin: new Uint8Array(Buffer.from(storeContent)), stdout: "pipe", stderr: "pipe" }
+              );
+              if ((await proc.exited) === 0) {
+                verified = true;
+                break;
+              }
+            } finally {
+              await rm(tmpDir, { recursive: true, force: true });
+            }
+          }
+          if (verified) break;
+        }
+      }
+    } catch {
+      // sigDir doesn't exist, try legacy .sig
+    }
+
+    // Legacy: single .sig file — also uses isolated GPG keyring
+    if (!verified) {
+      const legacySigPath = storePath + ".sig";
+      if (await Bun.file(legacySigPath).exists()) {
+        const config = await loadConfig();
+        const gpgKeys = getConfigKeys(config).filter(k => k.type === "gpg");
+        for (const gpgKey of gpgKeys) {
+          if (!gpgKey.fingerprint) continue;
+          const gpgHome = await mkTmpDir(join(osTmpdir(), "skillseal-trust-gpg-"));
+          try {
+            const recv = Bun.spawn(
+              ["gpg", "--homedir", gpgHome, "--keyserver", "hkps://keys.openpgp.org", "--recv-keys", gpgKey.fingerprint],
+              { stdout: "pipe", stderr: "pipe" }
+            );
+            await recv.exited;
+            const proc = Bun.spawn(
+              ["gpg", "--homedir", gpgHome, "--verify", "--", legacySigPath, contentTmpPath],
+              { stdout: "pipe", stderr: "pipe" }
+            );
+            if ((await proc.exited) === 0) {
+              verified = true;
+              break;
+            }
+          } finally {
+            await rm(gpgHome, { recursive: true, force: true });
           }
         }
       }
     }
-  } catch {
-    // sigDir doesn't exist, try legacy .sig
+  } finally {
+    await rm(contentTmpDir, { recursive: true, force: true });
   }
 
-  // Legacy: single .sig file
+  // FIX 2 (HIGH-3): File exists but signature is invalid — throw, don't return empty
   if (!verified) {
-    const legacySigPath = storePath + ".sig";
-    if (await Bun.file(legacySigPath).exists()) {
-      const proc = Bun.spawn(
-        ["gpg", "--verify", "--", legacySigPath, storePath],
-        { stdout: "pipe", stderr: "pipe" }
-      );
-      if ((await proc.exited) === 0) {
-        verified = true;
-      }
-    }
+    throw new Error(
+      "Trust store signature is INVALID. The trust store may have been tampered with. " +
+      "Re-sign with: skillseal trust add <github> <fingerprint>"
+    );
   }
 
-  if (!verified) {
-    console.warn("WARNING: Trust store signature is INVALID or missing. Treating as empty.");
-    console.warn("  Re-sign with: skillseal trust add <github> <fingerprint>");
-    return emptyStore();
-  }
-
+  // FIX 6 (TOCTOU): Parse the same content we verified, not a second file read
   try {
-    const data = await file.json();
+    const data = JSON.parse(storeContent);
     const store: TrustStore = {
       schema_version: data.schema_version || "0.2.5",
       trusted_authors: migrateEntities(data.trusted_authors || {}),
@@ -193,7 +241,10 @@ export async function loadTrustStore(): Promise<TrustStore> {
     };
     return store;
   } catch {
-    return emptyStore();
+    throw new Error(
+      "Trust store file is corrupted and cannot be parsed. " +
+      "Re-sign with: skillseal trust add <github> <fingerprint>"
+    );
   }
 }
 
@@ -225,37 +276,51 @@ export async function saveTrustStore(store: TrustStore): Promise<void> {
   const dir = join(homedir(), ".skillseal");
   await mkdir(dir, { recursive: true, mode: 0o700 });
   await mkdir(sigDir, { recursive: true, mode: 0o700 });
-  await Bun.write(storePath, JSON.stringify(store, null, 2) + "\n");
-  await chmod(storePath, 0o600);
 
-  // Sign with all configured keys
-  const config = await loadConfig();
-  const keys = getConfigKeys(config);
-
-  if (keys.length === 0) {
-    throw new Error(
-      "Cannot sign trust store: no keys in ~/.skillseal/config.json. " +
-      "Trust store modifications require at least one signing key."
-    );
+  // FIX 7 (LOW-13): Advisory file lock for trust store writes
+  const lockPath = storePath + ".lock";
+  try {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(lockPath, String(process.pid), { flag: "wx" });
+  } catch {
+    throw new Error("Trust store is locked by another process. Try again.");
   }
 
-  let signed = false;
-  for (const key of keys) {
-    const provider = getProvider(key.type);
-    if (!provider) continue;
+  try {
+    await Bun.write(storePath, JSON.stringify(store, null, 2) + "\n");
+    await chmod(storePath, 0o600);
 
-    const sigPath = join(sigDir, `${key.type}.sig`);
-    const keyRef = key.key_path || key.fingerprint;
-    const result = await provider.signFile(storePath, sigPath, keyRef);
-    if (result.success) {
-      signed = true;
+    // Sign with all configured keys
+    const config = await loadConfig();
+    const keys = getConfigKeys(config);
+
+    if (keys.length === 0) {
+      throw new Error(
+        "Cannot sign trust store: no keys in ~/.skillseal/config.json. " +
+        "Trust store modifications require at least one signing key."
+      );
     }
-  }
 
-  if (!signed) {
-    const { unlink } = await import("node:fs/promises");
-    await unlink(storePath).catch(() => {});
-    throw new Error("Trust store modification rejected: all signing attempts failed.");
+    let signed = false;
+    for (const key of keys) {
+      const provider = getProvider(key.type);
+      if (!provider) continue;
+
+      const sigPath = join(sigDir, `${key.type}.sig`);
+      const keyRef = key.key_path || key.fingerprint;
+      const result = await provider.signFile(storePath, sigPath, keyRef);
+      if (result.success) {
+        signed = true;
+      }
+    }
+
+    if (!signed) {
+      const { unlink } = await import("node:fs/promises");
+      await unlink(storePath).catch(() => {});
+      throw new Error("Trust store modification rejected: all signing attempts failed.");
+    }
+  } finally {
+    await rm(lockPath).catch(() => {});
   }
 }
 
@@ -337,7 +402,7 @@ export function evaluatePolicy(
         if (!store.overrides || store.overrides.length === 0) return true;
         return !store.overrides.some(
           (o) =>
-            (o.skill === skillName || o.skill === "*") &&
+            (o.skill === skillName || o.skill === "all") &&
             o.despite === d.bundle.statement.reviewer.github
         );
       });

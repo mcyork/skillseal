@@ -176,6 +176,7 @@ const FETCH_TIMEOUT_MS = 30_000;
 const MAX_KEY_SIZE = 1024 * 1024;
 
 export async function fetchGitHubSSHSigningKeys(username: string): Promise<GitHubSSHSigningKey[]> {
+  username = username.toLowerCase();
   if (!GITHUB_USERNAME_RE.test(username)) {
     throw new Error(`Invalid GitHub username: ${username}`);
   }
@@ -193,6 +194,10 @@ export async function fetchGitHubSSHSigningKeys(username: string): Promise<GitHu
     });
     clearTimeout(timer);
 
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('retry-after') || 'unknown';
+      throw new Error(`GitHub API rate limit exceeded. Retry after ${retryAfter} seconds.`);
+    }
     if (!response.ok) {
       throw new Error(`Failed to fetch SSH signing keys from ${url}: ${response.status} ${response.statusText}`);
     }
@@ -203,7 +208,7 @@ export async function fetchGitHubSSHSigningKeys(username: string): Promise<GitHu
     await writeCache("ssh", username, JSON.stringify(keys)).catch(() => {});
 
     const skillSealKeys = keys.filter((k) =>
-      k.title.toLowerCase().includes("skillseal")
+      k.title.toLowerCase() === "skillseal"
     );
 
     if (skillSealKeys.length === 0) {
@@ -223,7 +228,7 @@ export async function fetchGitHubSSHSigningKeys(username: string): Promise<GitHu
       try {
         const keys: GitHubSSHSigningKey[] = JSON.parse(cached);
         const skillSealKeys = keys.filter((k) =>
-          k.title.toLowerCase().includes("skillseal")
+          k.title.toLowerCase() === "skillseal"
         );
         if (skillSealKeys.length > 0) return skillSealKeys;
       } catch { /* cache corrupted, fall through */ }
@@ -233,6 +238,7 @@ export async function fetchGitHubSSHSigningKeys(username: string): Promise<GitHu
 }
 
 export async function fetchGitHubGPGKey(username: string): Promise<string> {
+  username = username.toLowerCase();
   if (!GITHUB_USERNAME_RE.test(username)) {
     throw new Error(`Invalid GitHub username: ${username}`);
   }
@@ -247,6 +253,10 @@ export async function fetchGitHubGPGKey(username: string): Promise<string> {
     const response = await fetch(url, { signal: controller.signal });
     clearTimeout(timer);
 
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('retry-after') || 'unknown';
+      throw new Error(`GitHub API rate limit exceeded. Retry after ${retryAfter} seconds.`);
+    }
     if (!response.ok) {
       throw new Error(`Failed to fetch GPG key from ${url}: ${response.status} ${response.statusText}`);
     }
@@ -284,8 +294,13 @@ export async function fetchGitHubGPGKey(username: string): Promise<string> {
 
 function safeCompare(a: string, b: string): boolean {
   const { timingSafeEqual } = require("node:crypto");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  const maxLen = Math.max(a.length, b.length);
+  const bufA = Buffer.alloc(maxLen);
+  const bufB = Buffer.alloc(maxLen);
+  bufA.write(a);
+  bufB.write(b);
+  // Still return false if lengths differ, but do so after constant-time comparison
+  return timingSafeEqual(bufA, bufB) && a.length === b.length;
 }
 
 class GPGProvider implements SigningProvider {
@@ -403,16 +418,34 @@ class GPGProvider implements SigningProvider {
       }
 
       const verifyProc = Bun.spawn(
-        ["gpg", "--homedir", tmpGpgHome, "--batch", "--verify", "--", sigPath, filePath],
+        ["gpg", "--homedir", tmpGpgHome, "--batch", "--status-fd", "1", "--verify", "--", sigPath, filePath],
         { stdout: "pipe", stderr: "pipe" }
       );
 
       const verifyExit = await verifyProc.exited;
+      const verifyStdout = await new Response(verifyProc.stdout).text();
       const verifyStderr = await new Response(verifyProc.stderr).text();
 
       if (verifyExit === 0) {
-        if (!verifyStderr.toUpperCase().includes(expectedFp)) {
-          warnings.push("Signature valid but fingerprint not directly confirmed in GPG output (may be a subkey)");
+        // Parse status-fd output for signing key fingerprint confirmation
+        const statusLines = verifyStdout.split("\n");
+        const validsigLine = statusLines.find((l) => l.includes("[GNUPG:] VALIDSIG"));
+        if (validsigLine) {
+          // VALIDSIG format: [GNUPG:] VALIDSIG <fingerprint> <date> ...
+          const parts = validsigLine.split(/\s+/);
+          const sigFp = parts[2]?.toUpperCase() || "";
+          if (!safeCompare(sigFp, expectedFp)) {
+            errors.push(`Signature made by key ${sigFp} but expected ${expectedFp}`);
+            return { valid: false, warnings, errors };
+          }
+        } else {
+          // No VALIDSIG line — check for GOODSIG as fallback
+          const goodsigLine = statusLines.find((l) => l.includes("[GNUPG:] GOODSIG"));
+          if (!goodsigLine) {
+            errors.push("GPG verification succeeded but could not confirm signing key identity from status output");
+            return { valid: false, warnings, errors };
+          }
+          warnings.push("Signature valid (GOODSIG) but VALIDSIG line not found — could not confirm exact fingerprint");
         }
         return { valid: true, warnings, errors };
       } else {
@@ -575,7 +608,7 @@ class SSHProvider implements SigningProvider {
     filePath: string,
     sigPath: string,
     github: string,
-    _expectedFingerprint: string,
+    expectedFingerprint: string,
   ): Promise<{ valid: boolean; warnings: string[]; errors: string[] }> {
     const errors: string[] = [];
     const warnings: string[] = [];
@@ -598,8 +631,41 @@ class SSHProvider implements SigningProvider {
         return { valid: false, warnings, errors };
       }
 
+      // Filter keys by expected fingerprint
+      const matchedKeys: string[] = [];
+      let tmpFpDir: string | null = null;
+      try {
+        tmpFpDir = await mkdtemp(join(tmpdir(), "skillseal-ssh-fp-"));
+        for (let i = 0; i < validKeys.length; i++) {
+          const tmpKeyFile = join(tmpFpDir, `key_${i}.pub`);
+          await Bun.write(tmpKeyFile, validKeys[i].trim() + "\n");
+          const fpProc = Bun.spawn(
+            ["ssh-keygen", "-lf", tmpKeyFile],
+            { stdout: "pipe", stderr: "pipe" }
+          );
+          const fpExit = await fpProc.exited;
+          if (fpExit !== 0) continue;
+          const fpOutput = await new Response(fpProc.stdout).text();
+          // Output format: "256 SHA256:xxxxx user@host (ED25519)"
+          const fpParts = fpOutput.trim().split(/\s+/);
+          const keyFingerprint = fpParts[1] || "";
+          if (safeCompare(keyFingerprint, expectedFingerprint)) {
+            matchedKeys.push(validKeys[i]);
+          }
+        }
+      } finally {
+        if (tmpFpDir) {
+          await rm(tmpFpDir, { recursive: true, force: true });
+        }
+      }
+
+      if (matchedKeys.length === 0) {
+        errors.push(`No SSH signing keys match expected fingerprint ${expectedFingerprint}`);
+        return { valid: false, warnings, errors };
+      }
+
       const signerIdentity = `${github}@github.com`;
-      const verified = await verifySSHSignatureRaw(filePath, sigPath, signerIdentity, validKeys);
+      const verified = await verifySSHSignatureRaw(filePath, sigPath, signerIdentity, matchedKeys);
       if (verified) {
         return { valid: true, warnings, errors };
       } else {
@@ -689,7 +755,7 @@ async function verifySSHSignatureRaw(
 
     const allowedSignersPath = join(tmpDir, "allowed_signers");
     const allowedSignersContent = allowedKeys
-      .map((key) => `${signerIdentity} ${key.trim()}`)
+      .map((key) => `${signerIdentity} ${key.replace(/[\r\n]/g, '').trim()}`)
       .join("\n") + "\n";
     await Bun.write(allowedSignersPath, allowedSignersContent);
 

@@ -26,11 +26,13 @@ export async function loadConfig(): Promise<SkillSealConfig> {
   const configPath = getConfigPath();
   const file = Bun.file(configPath);
   if (!(await file.exists())) {
+    console.warn("SkillSeal: Config file missing or invalid at ~/.skillseal/config.json — using empty config");
     return {};
   }
   try {
     return await file.json();
   } catch {
+    console.warn("SkillSeal: Config file missing or invalid at ~/.skillseal/config.json — using empty config");
     return {};
   }
 }
