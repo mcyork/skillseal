@@ -15,6 +15,7 @@ export interface SkillSealConfig {
   github?: string;
   author?: string;
   keys?: KeyConfig[];
+  offline?: boolean;  // Sets fetch timeout to 1s; cache never expires
 }
 
 function getConfigPath(): string {

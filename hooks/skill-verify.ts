@@ -137,10 +137,18 @@ async function verifySkill(skillName: string): Promise<{ valid: boolean; error?:
       if (result.policy.action === 'allow') {
         return { valid: true };
       }
-      // "prompt" and "refuse" both block in a hook (can't prompt interactively)
+      const blockInfo: Record<string, string> = {
+        scenario: result.policy.scenario,
+      };
+      if (result.policy.destatement) {
+        blockInfo.reviewer = result.policy.destatement.reviewer;
+        blockInfo.reason = result.policy.destatement.reason;
+        blockInfo.date = result.policy.destatement.date;
+      }
       return {
         valid: false,
         error: `Trust policy: ${result.policy.scenario} -> ${result.policy.action}`,
+        blockInfo,
       };
     }
 
@@ -184,9 +192,15 @@ async function main() {
     const result = await verifySkill(skillName);
 
     if (!result.valid) {
-      console.log(`SKILL BLOCKED: "${skillName}" failed SkillSeal verification`);
-      console.log(`  Error: ${result.error}`);
-      console.log(`  Skills must be signed and verified before execution.`);
+      console.log(`SKILL BLOCKED: "${skillName}"`);
+      if (result.blockInfo) {
+        console.log(`  Policy: ${result.blockInfo.scenario}`);
+        if (result.blockInfo.reviewer) console.log(`  Flagged by: ${result.blockInfo.reviewer}`);
+        if (result.blockInfo.reason) console.log(`  Reason: ${result.blockInfo.reason}`);
+        if (result.blockInfo.date) console.log(`  Date: ${result.blockInfo.date}`);
+      } else if (result.error) {
+        console.log(`  Error: ${result.error}`);
+      }
       process.exit(2);
     }
 

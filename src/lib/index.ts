@@ -16,7 +16,10 @@ export {
   isReviewerTrusted,
   evaluatePolicy,
 } from "./trust";
-export type { TrustStore, TrustedEntity, TrustedEntityKey, PolicyAction, PolicyScenario } from "./trust";
+export type { TrustStore, TrustedEntity, TrustedEntityKey, TrustStoreOverride, BundleSubscription, PolicyAction, PolicyScenario, DestatementInfo } from "./trust";
+
+export { readCache, writeCache } from "./cache";
+export type { CacheKeyType } from "./cache";
 
 export { loadConfig, getConfigKeys, getConfigKeysByType } from "./config";
 export type { SkillSealConfig, KeyConfig } from "./config";
@@ -43,8 +46,13 @@ export {
   discoverLocalAttestations,
   fetchAttestationFromUrl,
   probeReviewerRepo,
+  probeAttestationLiveness,
   discoverAttestations,
 } from "./attest";
+
+export { fetchBundle, verifyBundle, applyBundle } from "./bundle";
+export type { TrustBundleData } from "./bundle";
+
 export type {
   AttestationScope,
   AttestationSubject,

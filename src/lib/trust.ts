@@ -25,7 +25,8 @@ export type PolicyScenario =
   | "known_author_no_attestations"
   | "known_author_with_attestations"
   | "known_author_stale_attestations"
-  | "trusted_reviewer_attested";
+  | "trusted_reviewer_attested"
+  | "trusted_reviewer_destatement";
 
 export interface TrustedEntityKey {
   type: string;
@@ -40,11 +41,26 @@ export interface TrustedEntity {
   note?: string;
 }
 
+export interface TrustStoreOverride {
+  skill: string;
+  despite: string;
+  reason?: string;
+  added_at?: string;
+}
+
+export interface BundleSubscription {
+  source: string;
+  version: number;
+  last_updated: string;
+}
+
 export interface TrustStore {
   schema_version: string;
   trusted_authors: Record<string, TrustedEntity>;
   trusted_reviewers: Record<string, TrustedEntity>;
   policies: Record<PolicyScenario, PolicyAction>;
+  overrides?: TrustStoreOverride[];
+  bundles?: BundleSubscription[];
 }
 
 const DEFAULT_POLICIES: Record<PolicyScenario, PolicyAction> = {
@@ -55,6 +71,7 @@ const DEFAULT_POLICIES: Record<PolicyScenario, PolicyAction> = {
   known_author_with_attestations: "allow",
   known_author_stale_attestations: "prompt",
   trusted_reviewer_attested: "allow",
+  trusted_reviewer_destatement: "refuse",
 };
 
 function getTrustStorePath(): string {
@@ -63,10 +80,12 @@ function getTrustStorePath(): string {
 
 function emptyStore(): TrustStore {
   return {
-    schema_version: "0.2.0",
+    schema_version: "0.2.5",
     trusted_authors: {},
     trusted_reviewers: {},
     policies: { ...DEFAULT_POLICIES },
+    overrides: [],
+    bundles: [],
   };
 }
 
@@ -165,10 +184,12 @@ export async function loadTrustStore(): Promise<TrustStore> {
   try {
     const data = await file.json();
     const store: TrustStore = {
-      schema_version: data.schema_version || "0.2.0",
+      schema_version: data.schema_version || "0.2.5",
       trusted_authors: migrateEntities(data.trusted_authors || {}),
       trusted_reviewers: migrateEntities(data.trusted_reviewers || {}),
       policies: { ...DEFAULT_POLICIES, ...data.policies },
+      overrides: Array.isArray(data.overrides) ? data.overrides : [],
+      bundles: Array.isArray(data.bundles) ? data.bundles : [],
     };
     return store;
   } catch {
@@ -273,6 +294,12 @@ export function isReviewerTrusted(
   return false;
 }
 
+export interface DestatementInfo {
+  reviewer: string;
+  date: string;
+  reason: string;
+}
+
 export function evaluatePolicy(
   store: TrustStore,
   trust: TrustJson,
@@ -281,15 +308,53 @@ export function evaluatePolicy(
     valid: boolean;
     stale: boolean;
     signatureValid: boolean;
+    verdict: "approve" | "reject";
     bundle: {
       statement: {
         reviewer: { github: string; fingerprint: string };
+        attestation: { date: string; statement: string };
       };
     };
-  }>
-): { scenario: PolicyScenario; action: PolicyAction } {
+  }>,
+  skillName?: string
+): { scenario: PolicyScenario; action: PolicyAction; destatement?: DestatementInfo } {
   if (!signatureValid) {
     return { scenario: "signature_invalid", action: store.policies.signature_invalid };
+  }
+
+  // CHECK DESTATEMENTS FIRST — a destatement from a trusted reviewer blocks even trusted authors
+  if (verifiedAttestations) {
+    const destatements = verifiedAttestations.filter(
+      (a) =>
+        a.signatureValid &&
+        a.verdict === "reject" &&
+        isReviewerTrusted(store, a.bundle.statement.reviewer.github, a.bundle.statement.reviewer.fingerprint)
+    );
+
+    if (destatements.length > 0) {
+      // Filter out overridden destatements
+      const effectiveDestatements = destatements.filter((d) => {
+        if (!store.overrides || store.overrides.length === 0) return true;
+        return !store.overrides.some(
+          (o) =>
+            (o.skill === skillName || o.skill === "*") &&
+            o.despite === d.bundle.statement.reviewer.github
+        );
+      });
+
+      if (effectiveDestatements.length > 0) {
+        const first = effectiveDestatements[0];
+        return {
+          scenario: "trusted_reviewer_destatement",
+          action: store.policies.trusted_reviewer_destatement,
+          destatement: {
+            reviewer: first.bundle.statement.reviewer.github,
+            date: first.bundle.statement.attestation.date,
+            reason: first.bundle.statement.attestation.statement,
+          },
+        };
+      }
+    }
   }
 
   // Check if author is trusted by ANY of their declared keys
@@ -299,9 +364,9 @@ export function evaluatePolicy(
 
   if (!authorTrusted) {
     if (verifiedAttestations && verifiedAttestations.length > 0) {
-      const validAttestations = verifiedAttestations.filter((a) => a.signatureValid);
+      const validApprovals = verifiedAttestations.filter((a) => a.signatureValid && a.verdict !== "reject");
 
-      const hasTrustedCurrent = validAttestations.some(
+      const hasTrustedCurrent = validApprovals.some(
         (a) =>
           !a.stale &&
           isReviewerTrusted(store, a.bundle.statement.reviewer.github, a.bundle.statement.reviewer.fingerprint)
@@ -310,7 +375,7 @@ export function evaluatePolicy(
         return { scenario: "trusted_reviewer_attested", action: store.policies.trusted_reviewer_attested };
       }
 
-      const hasTrustedStale = validAttestations.some(
+      const hasTrustedStale = validApprovals.some(
         (a) =>
           a.stale &&
           isReviewerTrusted(store, a.bundle.statement.reviewer.github, a.bundle.statement.reviewer.fingerprint)
@@ -324,13 +389,13 @@ export function evaluatePolicy(
   }
 
   if (verifiedAttestations && verifiedAttestations.length > 0) {
-    const validAttestations = verifiedAttestations.filter((a) => a.signatureValid);
+    const validApprovals = verifiedAttestations.filter((a) => a.signatureValid && a.verdict !== "reject");
 
-    if (validAttestations.length === 0) {
+    if (validApprovals.length === 0) {
       return { scenario: "known_author_no_attestations", action: store.policies.known_author_no_attestations };
     }
 
-    const hasTrustedCurrent = validAttestations.some(
+    const hasTrustedCurrent = validApprovals.some(
       (a) =>
         !a.stale &&
         isReviewerTrusted(store, a.bundle.statement.reviewer.github, a.bundle.statement.reviewer.fingerprint)
@@ -339,7 +404,7 @@ export function evaluatePolicy(
       return { scenario: "trusted_reviewer_attested", action: store.policies.trusted_reviewer_attested };
     }
 
-    const hasTrustedStale = validAttestations.some(
+    const hasTrustedStale = validApprovals.some(
       (a) =>
         a.stale &&
         isReviewerTrusted(store, a.bundle.statement.reviewer.github, a.bundle.statement.reviewer.fingerprint)

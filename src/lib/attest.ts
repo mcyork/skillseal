@@ -7,6 +7,7 @@ import { readdir } from "node:fs/promises";
 import { timingSafeEqual } from "node:crypto";
 import { isPlugin } from "./manifest";
 import { getProvider, detectProvider } from "./providers";
+import { loadConfig } from "./config";
 import type { KeyConfig } from "./config";
 
 // ---------------------------------------------------------------------------
@@ -45,6 +46,7 @@ export interface AttestationStatement {
     scope: AttestationScope;
     statement: string;
     date: string;
+    verdict?: "approve" | "reject";
   };
 }
 
@@ -68,6 +70,7 @@ export interface AttestationResult {
   stale: boolean;
   source: "local" | "explicit" | "remote";
   errors: string[];
+  verdict: "approve" | "reject";
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +189,8 @@ export async function createAttestationStatement(
   skillDir: string,
   reviewer: AttestationReviewer,
   scope: AttestationScope,
-  statementText: string
+  statementText: string,
+  verdict: "approve" | "reject" = "approve"
 ): Promise<AttestationStatement> {
   const manifestPath = join(skillDir, "MANIFEST.json");
   const plugin = await isPlugin(skillDir);
@@ -256,6 +260,7 @@ export async function createAttestationStatement(
       scope,
       statement: statementText,
       date: new Date().toISOString(),
+      ...(verdict === "reject" ? { verdict: "reject" as const } : {}),
     },
   };
 }
@@ -368,6 +373,12 @@ export function parseAttestationBundle(json: string): AttestationBundle {
 
   if (!VALID_SCOPES.has(String(attestation.scope))) {
     throw new Error(`Invalid attestation scope: ${attestation.scope}`);
+  }
+
+  // Validate verdict if present
+  const verdict = (attestation as Record<string, unknown>).verdict;
+  if (verdict !== undefined && verdict !== "approve" && verdict !== "reject") {
+    throw new Error(`Invalid attestation verdict: ${verdict}. Must be "approve" or "reject".`);
   }
 
   // Validate signatures array
@@ -483,6 +494,21 @@ export async function verifyAttestationBundle(
     errors.push("No valid signature found in attestation bundle");
   }
 
+  // 4. HEAD probe for local attestations — check if still published
+  if (source === "local" && signatureValid) {
+    const config = await loadConfig();
+    const liveness = await probeAttestationLiveness(bundle, config.offline === true);
+    if (!liveness.exists) {
+      stale = true;
+      errors.push("Attestation may have been withdrawn — not found at reviewer's remote repo");
+    }
+  }
+
+  const attestVerdict: "approve" | "reject" =
+    (bundle.statement.attestation as Record<string, unknown>).verdict === "reject"
+      ? "reject"
+      : "approve";
+
   return {
     valid: signatureValid && digestMatch && errors.length === 0,
     bundle,
@@ -491,7 +517,48 @@ export async function verifyAttestationBundle(
     stale,
     source,
     errors,
+    verdict: attestVerdict,
   };
+}
+
+// ---------------------------------------------------------------------------
+// HEAD probe: check if a local attestation still exists at reviewer's remote
+// ---------------------------------------------------------------------------
+
+export async function probeAttestationLiveness(
+  bundle: AttestationBundle,
+  offline: boolean = false
+): Promise<{ exists: boolean; probeSkipped: boolean }> {
+  if (offline) return { exists: true, probeSkipped: true };
+
+  const reviewer = bundle.statement.reviewer.github;
+  const skill = bundle.statement.subject.skill;
+  const version = bundle.statement.subject.version;
+
+  // Derive author path from repository field
+  const repo = bundle.statement.subject.repository;
+  let authorPath = skill;
+  if (repo) {
+    const parts = repo.replace(/^github\.com\//, "").split("/");
+    if (parts.length >= 1) {
+      authorPath = parts[0] + "/" + skill;
+    }
+  }
+
+  const url =
+    `https://raw.githubusercontent.com/${reviewer}/skillseal-attestations/main/` +
+    `${authorPath}/${version}.attestation.json`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    const response = await fetch(url, { method: "HEAD", signal: controller.signal });
+    clearTimeout(timeout);
+    return { exists: response.ok, probeSkipped: false };
+  } catch {
+    // Network error — don't block, skip probe
+    return { exists: true, probeSkipped: true };
+  }
 }
 
 // ---------------------------------------------------------------------------

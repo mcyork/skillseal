@@ -1,6 +1,6 @@
 # SkillSeal Attestation Format Specification
 
-**Version:** 0.2.0
+**Version:** 0.2.5
 **Status:** Draft
 
 ## Overview
@@ -21,7 +21,7 @@ File extension: `.attestation.json`
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.2.5",
   "format": "skillseal-attestation-bundle/v1",
   "statement": {
     "type": "https://skillseal.dev/attestation/review/v1",
@@ -42,6 +42,7 @@ File extension: `.attestation.json`
     },
     "attestation": {
       "scope": "<scope-value>",
+      "verdict": "<approve-or-reject>",
       "statement": "<human-readable-review-text>",
       "date": "<ISO-8601>"
     }
@@ -59,7 +60,7 @@ File extension: `.attestation.json`
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `schema_version` | Yes | `"0.2.0"` |
+| `schema_version` | Yes | `"0.2.5"` |
 | `format` | Yes | Always `"skillseal-attestation-bundle/v1"` |
 | `statement` | Yes | The signed attestation statement |
 | `signatures` | Yes | Array of `{type, value}` objects — one per signing key |
@@ -99,6 +100,7 @@ Verification requires only ONE valid signature in the array to pass.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `scope` | Yes | One of: `full-review`, `security-audit`, `automated-scan`, `functional-review` |
+| `verdict` | No | `"approve"` (default) or `"reject"` (destatement). Omitted = approve for backwards compatibility. |
 | `statement` | Yes | Human-readable review statement |
 | `date` | Yes | ISO 8601 timestamp of attestation creation |
 
@@ -209,10 +211,83 @@ When verified attestations are present, `evaluatePolicy()` uses them instead of 
 
 | Scenario | Condition |
 |----------|-----------|
+| `trusted_reviewer_destatement` | A trusted reviewer published a destatement (`verdict: "reject"`) |
 | `trusted_reviewer_attested` | A trusted reviewer has a valid, current attestation |
 | `known_author_stale_attestations` | A trusted reviewer attested, but all attestations are stale |
 | `known_author_with_attestations` | Attestations exist but none from trusted reviewers |
 | `known_author_no_attestations` | No attestations (or none with valid signatures) |
+
+## Destatements
+
+A **destatement** is a negative attestation — an attestation bundle where `statement.attestation.verdict` is `"reject"`. It signals that a trusted reviewer has identified a problem with a skill and recommends blocking execution.
+
+### Destatement Bundle Example
+
+```json
+{
+  "schema_version": "0.2.5",
+  "format": "skillseal-attestation-bundle/v1",
+  "statement": {
+    "type": "https://skillseal.dev/attestation/review/v1",
+    "subject": {
+      "skill": "malicious-skill",
+      "version": "1.2.0",
+      "repository": "github.com/attacker/malicious-skill",
+      "commit": "abc123...",
+      "digests": {
+        "skill_md_sha256": "...",
+        "manifest_sha256": "..."
+      }
+    },
+    "reviewer": {
+      "name": "Security Team",
+      "github": "security-team",
+      "fingerprint": "FEDCBA0987654321..."
+    },
+    "attestation": {
+      "scope": "security-audit",
+      "verdict": "reject",
+      "statement": "Critical vulnerability: skill exfiltrates environment variables via network request.",
+      "date": "2026-02-16T00:00:00Z"
+    }
+  },
+  "signatures": [
+    { "type": "gpg", "value": "-----BEGIN PGP SIGNATURE-----\n...\n-----END PGP SIGNATURE-----" }
+  ]
+}
+```
+
+### Creating a Destatement
+
+```bash
+skillseal attest <dir> --reject --scope security-audit --statement "Critical vulnerability found"
+```
+
+The `--reject` flag sets `verdict: "reject"` in the attestation statement.
+
+### Evaluation Order
+
+Destatements are checked **before** any positive trust evaluation. The trust decision flow:
+
+1. Check for destatements from trusted reviewers
+2. If destatement found and no per-skill override exists → apply `trusted_reviewer_destatement` policy (default: `refuse`)
+3. If no destatement → proceed to positive trust evaluation (author trust, attestation trust)
+
+A destatement from a trusted reviewer blocks execution regardless of whether the skill's author is trusted. This gives reviewers the ability to flag dangerous skills that have already been signed and distributed.
+
+### Per-Skill Overrides
+
+Users can override specific destatements via the trust store:
+
+```bash
+skillseal trust override add <skill> --despite <reviewer> --reason "We reviewed and disagree"
+```
+
+Overrides apply only to the specific skill + reviewer combination.
+
+### Liveness Probe
+
+For local attestations (including destatements), SkillSeal performs a HEAD request to the reviewer's expected remote repository URL. If the attestation has been deleted (HTTP 404), it is treated as withdrawn and marked stale. This provides a soft revocation mechanism — a reviewer who changes their assessment can delete the destatement from their repository.
 
 ## Migration from v0.1.0
 
@@ -223,5 +298,5 @@ Bundles with schema version `0.1.0` use a single `"signature"` field (string) in
 - **Transparency logs** — No centralized attestation registry
 - **Keyless signing** — GPG/SSH keys are the identity layer (no Sigstore/OIDC)
 - **Partial attestation** — Attestations cover the full package
-- **Attestation revocation** — Reviewer deletes from their repo
+- **Hard attestation revocation** — Attestation withdrawal is detected via HEAD probe (soft revocation), but there is no cryptographic revocation mechanism. Reviewers delete from their repo to withdraw.
 - **Meta-attestation** — No "I attest that X's attestation is valid"

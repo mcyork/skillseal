@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // SkillSeal CLI — entry point and command router
-// v0.2.0: Multi-key provider-based signing
+// v0.2.5: Destatements, trust bundles, overrides, key caching
 
 import { signCommand } from "./sign";
 import { signAllCommand } from "./sign-all";
@@ -18,7 +18,7 @@ Usage:
   skillseal verify <dir>    Verify a skill or plugin (auto-detects key types)
   skillseal attest <dir>    Create a multi-signature attestation bundle
   skillseal init <dir>      Scaffold a new skill package
-  skillseal trust <cmd>     Manage trust store (add, remove, add-key, remove-key, list, set-policy)
+  skillseal trust <cmd>     Manage trust store (add, remove, list, set-policy, override, bundle)
   skillseal cache-clear     Clear cached credentials for all providers
 
 Configuration (~/.skillseal/config.json):
@@ -40,7 +40,7 @@ Options:
   --version Show version
 `;
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.5";
 
 async function main() {
   const args = process.argv.slice(2);

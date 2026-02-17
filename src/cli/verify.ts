@@ -11,8 +11,8 @@ import {
   parseAttestationBundle,
   fetchAttestationFromUrl,
 } from "../lib";
-import type { TrustJson, AttestationBundle, PluginVerifyResult } from "../lib";
-import { join, resolve } from "node:path";
+import type { TrustJson, AttestationBundle, PluginVerifyResult, DestatementInfo } from "../lib";
+import { join, resolve, basename } from "node:path";
 
 export async function verifyCommand(skillDir: string, extraArgs?: string[]): Promise<void> {
   const args = extraArgs || process.argv.slice(3);
@@ -83,7 +83,7 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
   const pluginVersion = pluginResult.pluginVersion;
 
   // Evaluate trust policy
-  let policy: { scenario: string; action: string } | null = null;
+  let policy: { scenario: string; action: string; destatement?: DestatementInfo } | null = null;
   const trustStore = await loadTrustStore();
 
   if (result.author) {
@@ -96,16 +96,18 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
         trustStore,
         trust,
         result.signatureValid,
-        result.attestations.length > 0 ? result.attestations : undefined
+        result.attestations.length > 0 ? result.attestations : undefined,
+        basename(skillDir)
       );
     }
   } else if (result.attestations.length > 0) {
     // Unsigned skill/plugin with attestations — evaluate attestation trust directly.
     const validAtts = result.attestations.filter((a) => a.signatureValid);
 
-    const hasTrustedCurrent = validAtts.some(
+    // Check destatements from trusted reviewers first
+    const destatements = validAtts.filter(
       (a) =>
-        !a.stale &&
+        a.verdict === "reject" &&
         isReviewerTrusted(
           trustStore,
           a.bundle.statement.reviewer.github,
@@ -113,15 +115,23 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
         )
     );
 
-    if (hasTrustedCurrent) {
+    if (destatements.length > 0) {
+      const first = destatements[0];
       policy = {
-        scenario: "trusted_reviewer_attested",
-        action: trustStore.policies.trusted_reviewer_attested,
+        scenario: "trusted_reviewer_destatement",
+        action: trustStore.policies.trusted_reviewer_destatement,
+        destatement: {
+          reviewer: first.bundle.statement.reviewer.github,
+          date: first.bundle.statement.attestation.date,
+          reason: first.bundle.statement.attestation.statement,
+        },
       };
     } else {
-      const hasTrustedStale = validAtts.some(
+      const validApprovals = validAtts.filter((a) => a.verdict !== "reject");
+
+      const hasTrustedCurrent = validApprovals.some(
         (a) =>
-          a.stale &&
+          !a.stale &&
           isReviewerTrusted(
             trustStore,
             a.bundle.statement.reviewer.github,
@@ -129,16 +139,33 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
           )
       );
 
-      if (hasTrustedStale) {
+      if (hasTrustedCurrent) {
         policy = {
-          scenario: "known_author_stale_attestations",
-          action: trustStore.policies.known_author_stale_attestations,
+          scenario: "trusted_reviewer_attested",
+          action: trustStore.policies.trusted_reviewer_attested,
         };
       } else {
-        policy = {
-          scenario: "unsigned",
-          action: trustStore.policies.unsigned,
-        };
+        const hasTrustedStale = validApprovals.some(
+          (a) =>
+            a.stale &&
+            isReviewerTrusted(
+              trustStore,
+              a.bundle.statement.reviewer.github,
+              a.bundle.statement.reviewer.fingerprint
+            )
+        );
+
+        if (hasTrustedStale) {
+          policy = {
+            scenario: "known_author_stale_attestations",
+            action: trustStore.policies.known_author_stale_attestations,
+          };
+        } else {
+          policy = {
+            scenario: "unsigned",
+            action: trustStore.policies.unsigned,
+          };
+        }
       }
     }
   }
@@ -155,6 +182,7 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
         reviewer: att.bundle.statement.reviewer,
         scope: att.bundle.statement.attestation.scope,
         version: att.bundle.statement.subject.version,
+        verdict: att.verdict || "approve",
         signatureValid: att.signatureValid,
         digestMatch: att.digestMatch,
         stale: att.stale,
@@ -207,8 +235,9 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
       const freshness = att.stale ? "STALE" : "CURRENT";
 
       if (att.signatureValid) {
+        const verdictLabel = att.verdict === "reject" ? " — REJECT" : "";
         console.log(
-          `    ${reviewer.github} (${reviewer.name}): ${sigStatus} [${scope}] (v${version} — ${freshness})`
+          `    ${reviewer.github} (${reviewer.name}): ${sigStatus} [${scope}] (v${version} — ${freshness})${verdictLabel}`
         );
       } else {
         console.log(
@@ -240,6 +269,12 @@ export async function verifyCommand(skillDir: string, extraArgs?: string[]): Pro
 
   if (policy) {
     console.log(`\n  Trust policy: ${policy.scenario} -> ${policy.action}`);
+    if (policy.destatement) {
+      console.log(`  Destatement:`);
+      console.log(`    Flagged by: ${policy.destatement.reviewer}`);
+      console.log(`    Reason: ${policy.destatement.reason}`);
+      console.log(`    Date: ${policy.destatement.date}`);
+    }
   }
 
   // Overall result

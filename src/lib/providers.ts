@@ -5,6 +5,8 @@
 import { join } from "node:path";
 import { mkdtemp, rm, chmod, copyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { readCache, writeCache } from "./cache";
+import { loadConfig } from "./config";
 
 // ---------------------------------------------------------------------------
 // Provider interface
@@ -178,39 +180,56 @@ export async function fetchGitHubSSHSigningKeys(username: string): Promise<GitHu
     throw new Error(`Invalid GitHub username: ${username}`);
   }
 
+  const config = await loadConfig();
+  const timeoutMs = config.offline ? 1_000 : FETCH_TIMEOUT_MS;
   const url = `https://api.github.com/users/${username}/ssh_signing_keys`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  let response: Response;
   try {
-    response = await fetch(url, {
+    const response = await fetch(url, {
       signal: controller.signal,
       headers: { "Accept": "application/vnd.github+json" },
     });
-  } finally {
-    clearTimeout(timeout);
-  }
+    clearTimeout(timer);
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch SSH signing keys from ${url}: ${response.status} ${response.statusText}`);
-  }
+    if (!response.ok) {
+      throw new Error(`Failed to fetch SSH signing keys from ${url}: ${response.status} ${response.statusText}`);
+    }
 
-  const keys: GitHubSSHSigningKey[] = await response.json();
+    const keys: GitHubSSHSigningKey[] = await response.json();
 
-  const skillSealKeys = keys.filter((k) =>
-    k.title.toLowerCase().includes("skillseal")
-  );
+    // Cache all keys on success
+    await writeCache("ssh", username, JSON.stringify(keys)).catch(() => {});
 
-  if (skillSealKeys.length === 0) {
-    throw new Error(
-      `No SSH signing keys titled "SkillSeal" found for github.com/${username}. ` +
-      `Found ${keys.length} signing key(s) with titles: ${keys.map((k) => `"${k.title}"`).join(", ") || "(none)"}. ` +
-      `Add a signing key at: https://github.com/settings/keys`
+    const skillSealKeys = keys.filter((k) =>
+      k.title.toLowerCase().includes("skillseal")
     );
-  }
 
-  return skillSealKeys;
+    if (skillSealKeys.length === 0) {
+      throw new Error(
+        `No SSH signing keys titled "SkillSeal" found for github.com/${username}. ` +
+        `Found ${keys.length} signing key(s) with titles: ${keys.map((k) => `"${k.title}"`).join(", ") || "(none)"}. ` +
+        `Add a signing key at: https://github.com/settings/keys`
+      );
+    }
+
+    return skillSealKeys;
+  } catch (err) {
+    clearTimeout(timer);
+    // Fall back to cache
+    const cached = await readCache("ssh", username);
+    if (cached) {
+      try {
+        const keys: GitHubSSHSigningKey[] = JSON.parse(cached);
+        const skillSealKeys = keys.filter((k) =>
+          k.title.toLowerCase().includes("skillseal")
+        );
+        if (skillSealKeys.length > 0) return skillSealKeys;
+      } catch { /* cache corrupted, fall through */ }
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
 }
 
 export async function fetchGitHubGPGKey(username: string): Promise<string> {
@@ -218,35 +237,45 @@ export async function fetchGitHubGPGKey(username: string): Promise<string> {
     throw new Error(`Invalid GitHub username: ${username}`);
   }
 
+  const config = await loadConfig();
+  const timeoutMs = config.offline ? 1_000 : FETCH_TIMEOUT_MS;
   const url = `https://github.com/${username}.gpg`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  let response: Response;
   try {
-    response = await fetch(url, { signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch GPG key from ${url}: ${response.status} ${response.statusText}`);
-  }
+    if (!response.ok) {
+      throw new Error(`Failed to fetch GPG key from ${url}: ${response.status} ${response.statusText}`);
+    }
 
-  const contentLength = response.headers.get("content-length");
-  if (contentLength && parseInt(contentLength, 10) > MAX_KEY_SIZE) {
-    throw new Error(`GPG key response too large: ${contentLength} bytes (max ${MAX_KEY_SIZE})`);
-  }
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && parseInt(contentLength, 10) > MAX_KEY_SIZE) {
+      throw new Error(`GPG key response too large: ${contentLength} bytes (max ${MAX_KEY_SIZE})`);
+    }
 
-  const keyData = await response.text();
-  if (keyData.length > MAX_KEY_SIZE) {
-    throw new Error(`GPG key data too large: ${keyData.length} bytes (max ${MAX_KEY_SIZE})`);
-  }
-  if (!keyData.includes("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
-    throw new Error("Response from GitHub is not a valid PGP public key block");
-  }
+    const keyData = await response.text();
+    if (keyData.length > MAX_KEY_SIZE) {
+      throw new Error(`GPG key data too large: ${keyData.length} bytes (max ${MAX_KEY_SIZE})`);
+    }
+    if (!keyData.includes("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
+      throw new Error("Response from GitHub is not a valid PGP public key block");
+    }
 
-  return keyData;
+    // Cache on success
+    await writeCache("gpg", username, keyData).catch(() => {});
+    return keyData;
+  } catch (err) {
+    clearTimeout(timer);
+    // Fall back to cache
+    const cached = await readCache("gpg", username);
+    if (cached && cached.includes("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
+      return cached;
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +373,19 @@ class GPGProvider implements SigningProvider {
       await listProc.exited;
 
       const listOutput = await new Response(listProc.stdout).text();
+
+      // Check for revoked keys — pub:r indicates revocation
+      const pubLines = listOutput.split("\n").filter((l) => l.startsWith("pub:"));
+      for (const pubLine of pubLines) {
+        const fields = pubLine.split(":");
+        if (fields[1] === "r") {
+          errors.push(
+            `GPG key from github.com/${github} is REVOKED. Refusing to verify with a revoked key.`
+          );
+          return { valid: false, warnings, errors };
+        }
+      }
+
       const fingerprints = listOutput
         .split("\n")
         .filter((l) => l.startsWith("fpr:"))

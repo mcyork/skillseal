@@ -13,7 +13,7 @@ Large language model agents execute skills and plugins — Markdown documents, c
 
 SkillSeal addresses this gap with a lightweight, self-bootstrapping cryptographic signing framework for LLM agent skill packages and plugins. Authors sign artifacts with multiple keys simultaneously — GPG and SSH — using a pluggable provider architecture that allows new signing methods without modifying core code. Keys are discoverable through GitHub's existing public key infrastructure (GPG keys via `github.com/{user}.gpg`, SSH signing keys via the GitHub API). A SHA-256 manifest ensures file-level integrity. A local trust store with configurable policy enables agents to make deterministic trust decisions without user intervention for known authors and reviewers. Independent reviewers can add attestations — multi-key-signed statements pinned to exact artifact digests — building a decentralized web of trust.
 
-A PreToolUse hook for Claude Code enforces verification at the point of execution with a fail-closed security model: any skill that fails verification is blocked before it can run. Verification requires only one valid signature to pass, so verifiers need only one of the author's key types.
+A PreToolUse hook for Claude Code enforces verification at the point of execution with a fail-closed security model: any skill that fails verification is blocked before it can run. Trusted reviewers can publish destatements — negative attestations that block execution regardless of author trust — and users can subscribe to community-curated trust bundles for scalable trust distribution. Verification requires only one valid signature to pass, so verifiers need only one of the author's key types.
 
 SkillSeal operates at the artifact layer, complementing rather than replacing transport-layer solutions (OAuth, TLS), gateway products, and container isolation. It fills a specific gap in the current landscape: no existing tool provides a portable, self-bootstrapping, artifact-level signing standard that individual authors can adopt today.
 
@@ -59,6 +59,7 @@ An agent's trust decision requires answers to four questions:
 - **Has it been tampered with since authoring?** (integrity)
 - **Do I have reason to trust that author?** (trust chain)
 - **Has anyone I trust reviewed this?** (attestation)
+- **Has anyone I trust flagged this as dangerous?** (destatement)
 
 Cryptographic signing provides the first two and the mechanism for the second two. GitHub stars provide a weak, gameable popularity signal. A cryptographic signature provides an identity that can accumulate reputation over time and be verified mechanically.
 
@@ -117,8 +118,8 @@ SkillSeal defends against six primary attack vectors. Each maps to a specific de
 
 ## What SkillSeal Does Not Prevent
 
-- **A trusted author publishing malicious code.** Signing proves identity, not intent. A trusted author who publishes a malicious update will pass verification. The current policy engine does not require attestations for trusted authors — `known_author_no_attestations` defaults to `allow`. The mitigation is to revoke trust (`skillseal trust remove`) when an author is compromised or acts maliciously.
-- **Key compromise.** If an author's private key is stolen, the attacker can produce valid signatures. Key revocation support is planned (Section 12).
+- **A trusted author publishing malicious code.** Signing proves identity, not intent. A trusted author who publishes a malicious update will pass verification. The current policy engine does not require attestations for trusted authors — `known_author_no_attestations` defaults to `allow`. The mitigation is to revoke trust (`skillseal trust remove`) when an author is compromised or acts maliciously. Additionally, trusted reviewers can publish destatements to flag dangerous skills for all users who trust them — providing a community-level response mechanism.
+- **Key compromise.** If an author's private key is stolen, the attacker can produce valid signatures. GPG key revocation is detected as of v0.2.5. SSH key revocation is planned.
 - **Vulnerabilities in skill logic.** SkillSeal verifies provenance and integrity, not functional correctness. A skill that accidentally exposes an SSRF vector will pass verification if the author signed it.
 - **Zero-day exploitation of GPG itself.** SkillSeal delegates cryptographic operations to GPG. A vulnerability in GPG affects all systems that depend on it.
 
@@ -149,7 +150,8 @@ SkillSeal's architecture is guided by five principles:
 | `skillseal sign-all <dir>` | Batch-sign all skills and plugins in a directory |
 | `skillseal attest <dir>` | Create a reviewer attestation bundle |
 | `skillseal init <dir>` | Scaffold a new skill package |
-| `skillseal trust <cmd>` | Manage the local trust store |
+| `skillseal trust <cmd>` | Manage trust store, overrides, and bundles |
+| `skillseal cache-clear` | Clear cached credentials for all providers |
 | `hooks/skill-verify.ts` | PreToolUse enforcement hook for Claude Code |
 | `skillseal-verify/SKILL.md` | Skill teaching LLMs to verify (self-signed) |
 | `skillseal-sign/SKILL.md` | Skill teaching LLMs to sign (self-signed) |
@@ -231,7 +233,7 @@ Author identity and key metadata are stored in `TRUST.json` rather than the fron
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.2.5",
   "author": {
     "name": "Ian McCutcheon",
     "github": "mcyork",
@@ -280,7 +282,7 @@ The manifest format:
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.2.5",
   "generated_at": "2026-02-14T00:00:00Z",
   "algorithm": "sha256",
   "files": {
@@ -379,7 +381,7 @@ Auto-detection means the user runs the same command for both: `skillseal verify 
 
 # Trust Model
 
-The trust model defines three paths to allowing a skill to execute. Any one path is sufficient.
+The trust model defines three paths to allowing a skill to execute and one path that blocks. Any positive path is sufficient for access; a destatement overrides all positive paths.
 
 ![Three paths to trust: trusted author, trusted attester with signed skill, trusted attester with unsigned skill.](diagrams/trust-model.svg)
 
@@ -413,13 +415,46 @@ Author publishes skill (unsigned) → Trusted reviewer attests → ALLOW
 
 This path enables verification of third-party skills from authors who have not adopted SkillSeal. The attestation pins the exact content that was reviewed. Any modification after attestation makes the attestation stale.
 
+## Path 4: Destatement (Blocking)
+
+A trusted reviewer has examined a skill and published a **destatement** — an attestation bundle with `verdict: "reject"`. This signals that the reviewer has identified a problem with the skill.
+
+```
+Reviewer publishes destatement → Reviewer is in trust store → BLOCK
+```
+
+Destatements are checked **before** any positive trust evaluation. A skill that is signed by a trusted author, attested by three trusted reviewers, and destatement'd by one trusted reviewer is blocked. The destatement overrides all positive signals.
+
+This gives reviewers the power to flag dangerous skills. When a vulnerability is discovered in a published skill, a reviewer can publish a destatement that immediately blocks execution for all users who trust that reviewer — without requiring the author to take any action.
+
+### Per-Skill Overrides
+
+If a user disagrees with a specific destatement, they can add a per-skill override to their trust store:
+
+```bash
+skillseal trust override add my-skill --despite reviewer-github --reason "We reviewed and disagree"
+```
+
+The override applies only to the specific combination of skill name and reviewer. The destatement still exists and is still visible — it is simply bypassed for that skill in that user's trust store.
+
+### Trust Bundles
+
+Community curators and organizations can publish **trust bundles** — signed JSON files containing curated lists of trusted authors and reviewers, hosted on GitHub repositories:
+
+```bash
+skillseal trust bundle add org/trust-bundle-repo
+skillseal trust bundle update
+```
+
+On update, SkillSeal fetches the bundle, verifies the publisher's signature against the local trust store, and merges new entries without overwriting existing ones. Revoked fingerprints in the bundle remove matching keys from the local store. This enables scalable trust distribution — a security team can maintain a bundle that all members subscribe to.
+
 ## Trust Store
 
 The trust store is a local JSON file at `~/.skillseal/trust-store.json` that records trusted authors, trusted reviewers, and policy configuration:
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.2.5",
   "trusted_authors": {
     "mcyork": {
       "keys": [
@@ -438,7 +473,9 @@ The trust store is a local JSON file at `~/.skillseal/trust-store.json` that rec
       "trust_level": "reviewer"
     }
   },
-  "policies": { ... }
+  "policies": { ... },
+  "overrides": [],
+  "bundles": []
 }
 ```
 
@@ -470,6 +507,7 @@ The policy engine maps seven trust scenarios to four possible actions:
 | `known_author_with_attestations` | Trusted author, attestations present but reviewers not trusted | `allow` |
 | `known_author_stale_attestations` | Trusted reviewer attested, but attestation is for an older version | `prompt` |
 | `trusted_reviewer_attested` | Trusted reviewer has a current, valid attestation | `allow` |
+| `trusted_reviewer_destatement` | A trusted reviewer published a destatement (verdict: "reject") | `refuse` |
 
 ### Decision Flow
 
@@ -477,21 +515,29 @@ The key principle: **attestation trust overrides author trust.** If a trusted re
 
 ```
 Skill discovered
+  │
+  ├── Signature invalid? → "signature_invalid"
+  │
+  ├── *** CHECK DESTATEMENTS FIRST ***
+  │   Any trusted reviewer destatement (verdict: "reject")?
+  │     ├── Yes → Override exists for this skill + reviewer?
+  │     │     ├── Yes → Skip this destatement, continue
+  │     │     └── No  → "trusted_reviewer_destatement" (BLOCKS)
+  │     └── No → Continue to positive trust evaluation
+  │
   ├── Has signature and TRUST.json?
   │     ├── No → Has valid attestation from trusted reviewer?
   │     │         ├── Yes (current) → "trusted_reviewer_attested"
   │     │         ├── Yes (stale)   → "known_author_stale_attestations"
   │     │         └── No            → "unsigned"
-  │     └── Yes → Verify signature
-  │           ├── Invalid → "signature_invalid"
-  │           └── Valid → Check for trusted reviewer attestation
-  │                 ├── Current → "trusted_reviewer_attested"
-  │                 ├── Stale   → "known_author_stale_attestations"
-  │                 └── None    → Check author in trust store
-  │                       ├── Unknown → "unknown_author"
-  │                       └── Known → Check attestation presence
-  │                             ├── None     → "known_author_no_attestations"
-  │                             └── Untrusted → "known_author_with_attestations"
+  │     └── Yes → Check for trusted reviewer attestation
+  │           ├── Current → "trusted_reviewer_attested"
+  │           ├── Stale   → "known_author_stale_attestations"
+  │           └── None    → Check author in trust store
+  │                 ├── Unknown → "unknown_author"
+  │                 └── Known → Check attestation presence
+  │                       ├── None     → "known_author_no_attestations"
+  │                       └── Untrusted → "known_author_with_attestations"
 ```
 
 This produces the same UX gradient as macOS's application signing: "identified developer" flows through, "unidentified developer" requires explicit permission, and unsigned applications are blocked by default.
@@ -516,7 +562,7 @@ An attestation bundle is a JSON file with the extension `.attestation.json`:
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.2.5",
   "format": "skillseal-attestation-bundle/v1",
   "statement": {
     "type": "https://skillseal.dev/attestation/review/v1",
@@ -537,6 +583,7 @@ An attestation bundle is a JSON file with the extension `.attestation.json`:
     },
     "attestation": {
       "scope": "full-review",
+      "verdict": "approve",
       "statement": "Reviewed all plugin contents. Safe.",
       "date": "2026-02-15T01:13:34.774Z"
     }
@@ -627,6 +674,8 @@ Claude Code's hook system allows external scripts to intercept tool invocations 
 5. Parses the JSON output
 6. Returns `exit 0` (allow) if the policy action is `allow` or `install_silently`
 7. Returns `exit 2` (block) with an error message for any other result
+
+When a skill is blocked, the hook outputs a facts-only message: the policy scenario that triggered the block, who flagged it (for destatements), the reason, and the date. No remediation commands or URLs are shown — the user decides how to respond.
 
 ## Fail-Closed Model
 
@@ -840,9 +889,29 @@ Verification uses `Bun.spawn()` with array-style argument passing (exec-style, n
 
 **TOCTOU in trust store operations.** Concurrent processes modifying the trust store can race. For read-only verification this is not a concern; write operations should use file locking in production deployments.
 
+## Key Cache
+
+Verification fetches public keys from GitHub on every run. To support offline and air-gapped environments, SkillSeal caches fetched keys locally at `~/.skillseal/key-cache/`. Keys are cached on successful fetch and served from cache when GitHub is unavailable. There is no TTL — cached keys persist until manually cleared.
+
+Setting `"offline": true` in `~/.skillseal/config.json` reduces the fetch timeout to 1 second, falling back to cache immediately. This enables fully offline verification when keys have been previously cached.
+
+## GPG Revocation Detection
+
+Before verifying a GPG signature, SkillSeal checks if the signing key has been revoked. It inspects the output of `gpg --list-keys --with-colons` for a `pub:r` record (revoked public key). If the key is revoked, verification fails immediately — even if the cached signature would otherwise be valid.
+
+This closes a gap in the previous model: a compromised key that was revoked via GPG's standard mechanism would still produce valid signatures in SkillSeal. Now, revocation propagates through GPG's existing infrastructure.
+
+## Attestation Liveness Probe
+
+For attestations discovered locally (in the `ATTESTATIONS/` directory), SkillSeal performs a HEAD request to the reviewer's expected remote repository to check if the attestation still exists. If the remote returns 404, the attestation is treated as stale with a warning that it may have been withdrawn.
+
+This provides a soft revocation mechanism for attestations — a reviewer who discovers a problem can delete their attestation from their repository, and SkillSeal will detect the withdrawal on next verification.
+
+Network errors do not block verification (the probe is best-effort). In offline mode, the probe is skipped entirely.
+
 # Future Work
 
-**Key revocation.** A `revoked_fingerprints` list in the trust store, combined with checking GPG's output for revocation signatures after key import. Authors can revoke compromised keys, and verification will detect the revocation.
+**Extended key revocation.** GPG revocation detection is implemented (v0.2.5). Future work includes SSH key revocation, cross-platform revocation propagation, and a revocation timeline that detects signatures made after a key was compromised.
 
 **Automated scanning attestations.** Integration with static analysis tools that can automatically generate `automated-scan` attestation bundles. An LLM agent reviews skill instructions for suspicious patterns and signs its findings.
 
@@ -870,7 +939,7 @@ The following specifications define the formats used by SkillSeal:
 - **Trust Store Format** (`spec/trust-store-format.md`): Trust store schema, integrity protection, policy scenarios and actions, trust decision flow, and CLI management.
 - **Attestation Format** (`spec/attestation-format.md`): Attestation bundle format, canonical JSON serialization, signing and verification processes, discovery mechanisms, and staleness semantics.
 
-All specifications are versioned at `0.2.0` and included in the SkillSeal repository.
+All specifications are versioned at `0.2.5` and included in the SkillSeal repository.
 
 # Appendix B: CLI Reference
 
@@ -889,6 +958,12 @@ Commands:
   trust remove-key    Remove a key from an entity
   trust list          List all trusted entities and their keys
   trust set-policy    Change a policy action
+  trust override add   Add a per-skill destatement override
+  trust override remove Remove a per-skill override
+  trust override list  List all overrides
+  trust bundle add     Subscribe to a trust bundle
+  trust bundle update  Fetch and merge bundle updates
+  trust bundle list    List bundle subscriptions
   cache-clear         Clear all provider caches
 
 Verify options:
@@ -900,6 +975,7 @@ Attest options:
                       automated-scan, functional-review)
   --statement <text>  Review statement
   --output <path>     Output file path
+  --reject            Create a destatement (negative attestation)
   --human             Human-readable output
 
 Trust options:
@@ -909,6 +985,12 @@ Trust options:
   remove-key <github> <fp> Remove a key from an entity
   list                    Show all trusted entities
   set-policy <s> <a>      Set policy for scenario to action
+  override add <skill> --despite <gh> [--reason "..."]
+  override remove <skill> --despite <gh>
+  override list
+  bundle add <org/repo>
+  bundle update
+  bundle list
 
 Configuration (~/.skillseal/config.json):
   {

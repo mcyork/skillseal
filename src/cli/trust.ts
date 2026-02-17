@@ -2,7 +2,7 @@
 // Manage the local trust store: add/remove authors and reviewers, list trusted entities
 // v0.2.0: Multi-key entities
 
-import { loadTrustStore, saveTrustStore } from "../lib";
+import { loadTrustStore, saveTrustStore, fetchBundle, verifyBundle, applyBundle } from "../lib";
 import type { TrustedEntity, TrustedEntityKey, PolicyScenario, PolicyAction } from "../lib";
 
 const VALID_SCENARIOS: PolicyScenario[] = [
@@ -13,6 +13,7 @@ const VALID_SCENARIOS: PolicyScenario[] = [
   "known_author_with_attestations",
   "known_author_stale_attestations",
   "trusted_reviewer_attested",
+  "trusted_reviewer_destatement",
 ];
 
 const VALID_ACTIONS: PolicyAction[] = ["refuse", "prompt", "allow", "install_silently"];
@@ -26,6 +27,12 @@ Usage:
   skillseal trust remove-key <github-username> <fingerprint>
   skillseal trust list
   skillseal trust set-policy <scenario> <action>
+  skillseal trust override add <skill> --despite <reviewer> [--reason "..."]
+  skillseal trust override remove <skill> --despite <reviewer>
+  skillseal trust override list
+  skillseal trust bundle add <org/repo>
+  skillseal trust bundle update
+  skillseal trust bundle list
 
 Fingerprint formats:
   GPG: 40 hex characters (e.g., 7097CE1EF54E0808FD3855427ED9682FF64286D0)
@@ -109,6 +116,12 @@ export async function trustCommand(args: string[]): Promise<void> {
       break;
     case "set-policy":
       await trustSetPolicy(args.slice(1));
+      break;
+    case "override":
+      await trustOverride(args.slice(1));
+      break;
+    case "bundle":
+      await trustBundle(args.slice(1));
       break;
     default:
       console.error(`Unknown trust subcommand: ${subcommand}`);
@@ -375,5 +388,267 @@ async function trustList(): Promise<void> {
       if (entity.note) console.log(`    Note: ${entity.note}`);
       if (entity.added_at) console.log(`    Added: ${entity.added_at}`);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Override subcommands
+// ---------------------------------------------------------------------------
+
+async function trustOverride(args: string[]): Promise<void> {
+  if (args.length === 0) {
+    console.error("Usage: skillseal trust override <add|remove|list>");
+    process.exit(1);
+  }
+
+  switch (args[0]) {
+    case "add":
+      await trustOverrideAdd(args.slice(1));
+      break;
+    case "remove":
+      await trustOverrideRemove(args.slice(1));
+      break;
+    case "list":
+      await trustOverrideList();
+      break;
+    default:
+      console.error(`Unknown override subcommand: ${args[0]}`);
+      process.exit(1);
+  }
+}
+
+async function trustOverrideAdd(args: string[]): Promise<void> {
+  const positional = args.filter((a) => !a.startsWith("--"));
+  const skill = positional[0];
+
+  let despite: string | undefined;
+  let reason: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--despite" && args[i + 1]) {
+      despite = args[++i];
+    } else if (args[i] === "--reason" && args[i + 1]) {
+      reason = args[++i];
+    }
+  }
+
+  if (!skill || !despite) {
+    console.error('Usage: skillseal trust override add <skill> --despite <reviewer> [--reason "..."]');
+    process.exit(1);
+  }
+
+  const store = await loadTrustStore();
+  if (!store.overrides) store.overrides = [];
+
+  const exists = store.overrides.some(
+    (o) => o.skill === skill && o.despite === despite
+  );
+
+  if (exists) {
+    console.log(`Override already exists: ${skill} despite ${despite}`);
+    return;
+  }
+
+  store.overrides.push({
+    skill,
+    despite,
+    reason,
+    added_at: new Date().toISOString(),
+  });
+
+  await saveTrustStore(store);
+  console.log(`Added override: ${skill} despite ${despite}`);
+  if (reason) console.log(`  Reason: ${reason}`);
+}
+
+async function trustOverrideRemove(args: string[]): Promise<void> {
+  const positional = args.filter((a) => !a.startsWith("--"));
+  const skill = positional[0];
+
+  let despite: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--despite" && args[i + 1]) {
+      despite = args[++i];
+    }
+  }
+
+  if (!skill || !despite) {
+    console.error("Usage: skillseal trust override remove <skill> --despite <reviewer>");
+    process.exit(1);
+  }
+
+  const store = await loadTrustStore();
+  if (!store.overrides || store.overrides.length === 0) {
+    console.log("No overrides configured.");
+    return;
+  }
+
+  const originalLen = store.overrides.length;
+  store.overrides = store.overrides.filter(
+    (o) => !(o.skill === skill && o.despite === despite)
+  );
+
+  if (store.overrides.length === originalLen) {
+    console.log(`Override not found: ${skill} despite ${despite}`);
+    return;
+  }
+
+  await saveTrustStore(store);
+  console.log(`Removed override: ${skill} despite ${despite}`);
+}
+
+async function trustOverrideList(): Promise<void> {
+  const store = await loadTrustStore();
+
+  if (!store.overrides || store.overrides.length === 0) {
+    console.log("No overrides configured.");
+    return;
+  }
+
+  console.log("Overrides:");
+  for (const o of store.overrides) {
+    console.log(`  ${o.skill} despite ${o.despite}`);
+    if (o.reason) console.log(`    Reason: ${o.reason}`);
+    if (o.added_at) console.log(`    Added: ${o.added_at}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bundle subcommands
+// ---------------------------------------------------------------------------
+
+async function trustBundle(args: string[]): Promise<void> {
+  if (args.length === 0) {
+    console.error("Usage: skillseal trust bundle <add|update|list>");
+    process.exit(1);
+  }
+
+  switch (args[0]) {
+    case "add":
+      await trustBundleAdd(args.slice(1));
+      break;
+    case "update":
+      await trustBundleUpdate();
+      break;
+    case "list":
+      await trustBundleList();
+      break;
+    default:
+      console.error(`Unknown bundle subcommand: ${args[0]}`);
+      process.exit(1);
+  }
+}
+
+async function trustBundleAdd(args: string[]): Promise<void> {
+  const source = args[0];
+  if (!source || !source.includes("/")) {
+    console.error("Usage: skillseal trust bundle add <org/repo>");
+    process.exit(1);
+  }
+
+  const store = await loadTrustStore();
+  if (!store.bundles) store.bundles = [];
+
+  if (store.bundles.some((b) => b.source === source)) {
+    console.log(`Already subscribed to bundle: ${source}`);
+    return;
+  }
+
+  console.log(`Fetching bundle from ${source}...`);
+  const { data, rawJson, signature } = await fetchBundle(source);
+
+  const publisher = source.split("/")[0];
+  const verification = await verifyBundle(rawJson, signature, publisher, store);
+  if (!verification.valid) {
+    console.error("Bundle verification failed:");
+    for (const err of verification.errors) {
+      console.error(`  ${err}`);
+    }
+    process.exit(1);
+  }
+
+  const result = applyBundle(data, store);
+
+  store.bundles.push({
+    source,
+    version: data.version,
+    last_updated: new Date().toISOString(),
+  });
+
+  await saveTrustStore(store);
+  console.log(`Subscribed to bundle: ${source}`);
+  console.log(`  Version: ${data.version}`);
+  console.log(`  Added authors: ${result.addedAuthors}`);
+  console.log(`  Added reviewers: ${result.addedReviewers}`);
+  if (result.revokedKeys > 0) {
+    console.log(`  Revoked keys: ${result.revokedKeys}`);
+  }
+}
+
+async function trustBundleUpdate(): Promise<void> {
+  const store = await loadTrustStore();
+  if (!store.bundles || store.bundles.length === 0) {
+    console.log("No bundle subscriptions. Add one with: skillseal trust bundle add <org/repo>");
+    return;
+  }
+
+  let updated = 0;
+  for (const sub of store.bundles) {
+    console.log(`Checking ${sub.source}...`);
+    try {
+      const { data, rawJson, signature } = await fetchBundle(sub.source);
+      if (data.version <= sub.version) {
+        console.log(`  Up to date (v${sub.version})`);
+        continue;
+      }
+
+      const publisher = sub.source.split("/")[0];
+      const verification = await verifyBundle(rawJson, signature, publisher, store);
+
+      if (!verification.valid) {
+        console.warn(`  Warning: bundle verification failed for ${sub.source}`);
+        for (const err of verification.errors) {
+          console.warn(`    ${err}`);
+        }
+        continue;
+      }
+
+      const result = applyBundle(data, store);
+      sub.version = data.version;
+      sub.last_updated = new Date().toISOString();
+      updated++;
+
+      console.log(`  Updated to v${data.version}`);
+      console.log(`    Added authors: ${result.addedAuthors}`);
+      console.log(`    Added reviewers: ${result.addedReviewers}`);
+      if (result.revokedKeys > 0) {
+        console.log(`    Revoked keys: ${result.revokedKeys}`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`  Warning: failed to update ${sub.source}: ${msg}`);
+    }
+  }
+
+  if (updated > 0) {
+    await saveTrustStore(store);
+    console.log(`\nUpdated ${updated} bundle(s).`);
+  } else {
+    console.log("\nAll bundles up to date.");
+  }
+}
+
+async function trustBundleList(): Promise<void> {
+  const store = await loadTrustStore();
+
+  if (!store.bundles || store.bundles.length === 0) {
+    console.log("No bundle subscriptions.");
+    return;
+  }
+
+  console.log("Bundle Subscriptions:");
+  for (const sub of store.bundles) {
+    console.log(`  ${sub.source} (v${sub.version})`);
+    console.log(`    Last updated: ${sub.last_updated}`);
   }
 }

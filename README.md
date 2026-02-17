@@ -29,10 +29,11 @@ SkillSeal provides a lightweight signing framework for skill packages and plugin
 | `skillseal sign-all <dir>` | Sign all skills and plugins in a directory |
 | `skillseal attest <dir>` | Create a multi-key attestation bundle for a skill |
 | `skillseal init <dir>` | Scaffold a new skill package |
-| `skillseal trust <cmd>` | Manage trust store (add, remove, add-key, remove-key, list) |
+| `skillseal trust <cmd>` | Manage trust store (add, remove, list, set-policy, override, bundle) |
 | `skillseal-sign/SKILL.md` | Skill that teaches LLMs how to sign |
 | `skillseal-verify/SKILL.md` | Skill that teaches LLMs how to verify |
 | `hooks/skill-verify.ts` | PreToolUse hook for Claude Code enforcement |
+| `skillseal cache-clear` | Clear cached credentials for all providers |
 
 ## Configuration
 
@@ -148,7 +149,7 @@ skillseal init /path/to/new-skill
 
 ### Multi-Key Signing
 
-SkillSeal v0.2.0 introduces a **pluggable provider architecture** for signing. Authors configure multiple keys in `~/.skillseal/config.json`, and every signing operation produces one signature per key type in a `SIGNATURES/` directory:
+SkillSeal v0.2 introduces a **pluggable provider architecture** for signing. Authors configure multiple keys in `~/.skillseal/config.json`, and every signing operation produces one signature per key type in a `SIGNATURES/` directory:
 
 ```
 SIGNATURES/
@@ -203,7 +204,7 @@ The trust metadata file records the author's identity and all signing keys:
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.2.5",
   "author": {
     "name": "Ian McCutcheon",
     "email": "",
@@ -269,6 +270,22 @@ ssh-add -d /path/to/.ssh/skillseal_ed25519
 - **Personal use with trusted LLM agents:** Default caching is reasonable. Your passphrase protects the key at rest; the cache window is limited.
 - **Shared machines or untrusted agents:** Enable `ignore-cache-for-signing` for GPG. Remove SSH keys from agent.
 - **CI/CD or automated signing:** Use dedicated signing keys with no passphrase, stored in a secured environment with restricted access.
+
+## Key Cache and Offline Verification
+
+SkillSeal caches fetched public keys locally at `~/.skillseal/key-cache/`:
+
+```
+~/.skillseal/key-cache/
+├── gpg/
+│   └── mcyork.asc       # GPG public key
+└── ssh/
+    └── mcyork.json       # SSH signing keys
+```
+
+Keys are cached on every successful GitHub fetch and served from cache when GitHub is unavailable. There is no TTL — cached keys persist until manually cleared with `skillseal cache-clear`.
+
+For fully offline environments, set `"offline": true` in `~/.skillseal/config.json`. This reduces the GitHub fetch timeout to 1 second, falling back to cache immediately. Verification works normally as long as cached keys exist for the author.
 
 ## Hardening the Trust Store
 
@@ -381,7 +398,7 @@ If GPG reports a bad signature, the trust store has been modified since it was l
 
 ## Trust Model
 
-There are three paths to trust. Any one is sufficient.
+There are three paths to trust, and one path that blocks.
 
 ### Path 1: Trusted Author
 
@@ -411,6 +428,40 @@ Author publishes skill (unsigned) → Reviewer attests → You trust reviewer �
 
 This is how third-party skills from authors who haven't adopted SkillSeal can still be verified. The attestation pins the exact content that was reviewed.
 
+### Path 4: Destatement (Negative Attestation)
+
+A trusted reviewer has examined a skill and published a **destatement** — an attestation with `verdict: "reject"`. This signals that the reviewer found a problem. Destatements block execution regardless of author trust.
+
+```
+Reviewer publishes destatement → You trust reviewer → Skill is BLOCKED
+```
+
+Destatements are checked before any positive trust evaluation. A skill with a valid author signature AND a destatement from a trusted reviewer is still blocked. This gives reviewers the ability to flag dangerous skills even after they have been signed and distributed.
+
+### Per-Skill Overrides
+
+If you disagree with a specific destatement, you can override it for a specific skill:
+
+```bash
+skillseal trust override add my-skill --despite reviewer-github --reason "We reviewed and disagree"
+skillseal trust override remove my-skill --despite reviewer-github
+skillseal trust override list
+```
+
+Overrides are recorded in the trust store and apply only to the named skill and reviewer combination. The destatement still exists — it is simply bypassed for that skill.
+
+### Trust Bundles
+
+Organizations and community curators can publish **trust bundles** — signed JSON files containing lists of trusted authors and reviewers. Users subscribe to bundles and merge them into their local trust store:
+
+```bash
+skillseal trust bundle add org/trust-bundle-repo
+skillseal trust bundle update
+skillseal trust bundle list
+```
+
+On update, SkillSeal fetches the bundle from GitHub, verifies the publisher's signature against the local trust store, and merges new authors and reviewers without overwriting existing entries. Revoked fingerprints in the bundle remove matching keys from the local store.
+
 ### Policy Defaults
 
 | Scenario | Default Action |
@@ -422,6 +473,7 @@ This is how third-party skills from authors who haven't adopted SkillSeal can st
 | `known_author_with_attestations` (attestations exist but reviewer not trusted) | `allow` |
 | `known_author_stale_attestations` (trusted reviewer, but attestation is for an older version) | `prompt` |
 | `trusted_reviewer_attested` (trusted reviewer, current attestation) | `allow` |
+| `trusted_reviewer_destatement` (destatement from trusted reviewer) | `refuse` |
 
 Policies are configured in `~/.skillseal/trust-store.json`. The PreToolUse hook treats both `prompt` and `refuse` as block — hooks can't prompt interactively.
 
@@ -479,13 +531,17 @@ cp hooks/skill-verify.ts ~/.claude/hooks/skill-verify.ts
 (skill runs)
 ```
 
-**Unsigned or tampered skill** — blocked:
+**Blocked skill** — facts-only output:
 ```
 > /malicious-skill
-SKILL BLOCKED: "malicious-skill" failed SkillSeal verification
-  Error: Signature verification failed
-  Skills must be signed and verified before execution.
+SKILL BLOCKED: "malicious-skill"
+  Policy: trusted_reviewer_destatement
+  Flagged by: security-team
+  Reason: Critical vulnerability in network handler
+  Date: 2026-02-16T00:00:00Z
 ```
+
+The block message shows what happened (policy, who flagged it, why) without suggesting remediation commands. The user decides what to do.
 
 ### Prerequisites
 
@@ -495,20 +551,25 @@ SKILL BLOCKED: "malicious-skill" failed SkillSeal verification
 
 ## Roadmap
 
-**Shipped (v0.2.0):**
+**Shipped (v0.2.5):**
 
 - [x] **SSH signing support** — Ed25519 SSH keys alongside GPG
 - [x] **Multi-key signing** — Sign with multiple keys simultaneously via pluggable provider architecture
 - [x] **Multi-signature attestations** — Attestation bundles carry multiple signatures
+- [x] **Compiled binaries** — Standalone binaries for macOS (x64/ARM64) and Linux (x64/ARM64) via `bun build --compile`
+- [x] **Destatements** — Negative attestations (`verdict: "reject"`) that block execution regardless of author trust
+- [x] **Per-skill overrides** — Bypass specific destatements when you disagree with a reviewer's assessment
+- [x] **Trust bundles** — Subscribe to community-curated lists of trusted authors and reviewers
+- [x] **Key cache** — Offline verification via locally cached public keys
+- [x] **GPG revocation detection** — Revoked GPG keys are detected before signature verification
+- [x] **HEAD probe** — Liveness check for local attestations against reviewer's remote repository
 
 **Near-term:**
 
-- [x] **Compiled binaries** — Standalone binaries for macOS (x64/ARM64) and Linux (x64/ARM64) via `bun build --compile`. SHA256 checksums on GitHub Releases.
-- [ ] **Key revocation** — Mechanism to invalidate compromised keys via trust store revocation list.
+- [ ] **Crypto provider plugins** — Dynamic loading of third-party `SigningProvider` implementations from `~/.skillseal/providers/`. Plugin packages are signed skill packages — SkillSeal's own trust model protects its extensions. Enables: minisign, sigstore/cosign, post-quantum signatures, hardware tokens (YubiKey/PKCS#11).
 
 **Strategic:**
 
-- [ ] **Crypto provider plugins** — Dynamic loading of third-party `SigningProvider` implementations from `~/.skillseal/providers/`. Plugin packages are signed skill packages — SkillSeal's own trust model protects its extensions. Enables: minisign, sigstore/cosign, post-quantum signatures, hardware tokens (YubiKey/PKCS#11).
 - [ ] **Agent-agnostic verification** — Configurable signed artifact (not hardcoded to `SKILL.md`/`plugin.json`), enabling any LLM agent framework to adopt SkillSeal for instruction-file integrity.
 - [ ] **Windows compatibility** — Resolve POSIX-specific code paths (`/dev/stdin`, `GPG_TTY`, `chmod`) to support GPG4Win and Windows OpenSSH.
 

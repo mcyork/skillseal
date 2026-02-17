@@ -32,6 +32,7 @@ Options:
   --scope <scope>       Review scope (default: full-review)
                         Values: full-review, security-audit, automated-scan, functional-review
   --statement <text>    Review statement (default: "Reviewed. No issues found.")
+  --reject              Create a destatement (negative attestation — verdict: reject)
   --output <path>       Output file path (default: ./<skill>-<version>.attestation.json)
   --human               Human-readable output instead of JSON
   --help                Show this help message
@@ -53,6 +54,7 @@ export async function attestCommand(args: string[]): Promise<void> {
   let statementText = "Reviewed. No issues found.";
   let outputPath: string | null = null;
   let humanOutput = false;
+  let reject = false;
 
   for (let i = 1; i < args.length; i++) {
     switch (args[i]) {
@@ -71,6 +73,9 @@ export async function attestCommand(args: string[]): Promise<void> {
           process.exit(1);
         }
         statementText = args[i];
+        break;
+      case "--reject":
+        reject = true;
         break;
       case "--output":
         i++;
@@ -139,7 +144,8 @@ export async function attestCommand(args: string[]): Promise<void> {
   }
 
   // Create statement
-  const statement = await createAttestationStatement(dir, reviewer, scope, statementText);
+  const verdict = reject ? "reject" as const : "approve" as const;
+  const statement = await createAttestationStatement(dir, reviewer, scope, statementText, verdict);
 
   if (humanOutput) {
     const nameLabel = isPluginDir ? "Plugin" : "Skill";

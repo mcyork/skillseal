@@ -1,6 +1,6 @@
 {
   "name": "skillseal",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "type": "module",
   "description": "Cryptographic signing and verification for LLM agent skills",
   "license": "Apache-2.0",
@@ -8,6 +8,7 @@
     "skillseal": "src/cli/index.ts"
   },
   "scripts": {
+    "test": "bun test",
     "build": "bun build src/cli/index.ts --outdir dist --target bun",
     "dev": "bun run src/cli/index.ts",
     "skillseal": "bun run src/cli/index.ts"

@@ -1,6 +1,6 @@
 # SkillSeal Trust Store Format Specification
 
-**Status:** v0.2.0
+**Status:** v0.2.5
 
 ## Overview
 
@@ -34,7 +34,7 @@ This prevents direct file edits from being accepted. However, if the signing key
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.2.5",
   "trusted_authors": {
     "github-username": {
       "keys": [
@@ -65,8 +65,24 @@ This prevents direct file edits from being accepted. However, if the signing key
     "known_author_no_attestations": "allow",
     "known_author_with_attestations": "allow",
     "known_author_stale_attestations": "prompt",
-    "trusted_reviewer_attested": "allow"
-  }
+    "trusted_reviewer_attested": "allow",
+    "trusted_reviewer_destatement": "refuse"
+  },
+  "overrides": [
+    {
+      "skill": "skill-name",
+      "despite": "reviewer-github",
+      "reason": "We reviewed and disagree with the destatement",
+      "added_at": "2026-02-16T00:00:00Z"
+    }
+  ],
+  "bundles": [
+    {
+      "source": "org/trust-bundle-repo",
+      "version": 1,
+      "last_updated": "2026-02-16T00:00:00Z"
+    }
+  ]
 }
 ```
 
@@ -74,7 +90,7 @@ This prevents direct file edits from being accepted. However, if the signing key
 
 ### `schema_version`
 
-String. The version of the trust store schema. Current version: `"0.2.0"`.
+String. The version of the trust store schema. Current version: `"0.2.5"`.
 
 ### `trusted_authors`
 
@@ -125,6 +141,7 @@ Object. Maps trust scenarios to actions. Each key is a scenario, and the value i
 | `known_author_with_attestations` | Author is trusted, attestations present but reviewers not in trust store |
 | `known_author_stale_attestations` | Author is trusted (or not), a trusted reviewer attested, but the attestation is for an older version (digest mismatch) |
 | `trusted_reviewer_attested` | A trusted reviewer has a current, valid attestation for this exact version |
+| `trusted_reviewer_destatement` | A trusted reviewer has published a destatement (negative attestation with `verdict: "reject"`) — blocks execution regardless of author trust |
 
 ## Default Policies
 
@@ -139,8 +156,42 @@ When no trust store exists or a scenario is not specified, the defaults are:
 | `known_author_with_attestations` | `allow` |
 | `known_author_stale_attestations` | `prompt` |
 | `trusted_reviewer_attested` | `allow` |
+| `trusted_reviewer_destatement` | `refuse` |
 
 Policies can be changed with `skillseal trust set-policy <scenario> <action>`.
+
+### `overrides`
+
+Array. Per-skill overrides that bypass specific destatements. Each entry:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `skill` | string | yes | Skill name (or `"*"` for all skills) |
+| `despite` | string | yes | GitHub username of the reviewer whose destatement to override |
+| `reason` | string | no | Why the override was added |
+| `added_at` | string | no | ISO 8601 timestamp |
+
+When a destatement from a trusted reviewer would block a skill, the overrides array is checked. If an override exists matching the skill name AND the destatement reviewer's GitHub username, the destatement is ignored for that specific skill.
+
+### `bundles`
+
+Array. Subscriptions to community-curated trust bundles. Each entry:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `source` | string | yes | GitHub `org/repo` path for the bundle |
+| `version` | number | yes | Last applied bundle version |
+| `last_updated` | string | yes | ISO 8601 timestamp of last update |
+
+Trust bundles are signed JSON files published on GitHub repos. On `skillseal trust bundle update`, SkillSeal fetches the bundle, verifies the publisher's signature against the local trust store, and merges new authors/reviewers (without overwriting existing entries). Revoked fingerprints in the bundle remove matching keys from the local store.
+
+## Destatements
+
+A **destatement** is a negative attestation — an attestation bundle with `verdict: "reject"` in the attestation statement. It signals that a trusted reviewer has found an issue with a skill.
+
+Destatements are checked **before** any positive trust evaluation. A destatement from a trusted reviewer blocks execution regardless of whether the author is trusted. The `trusted_reviewer_destatement` policy defaults to `refuse`.
+
+To override a specific destatement: `skillseal trust override add <skill> --despite <reviewer>`.
 
 ## Trust Decision Flow
 
@@ -149,25 +200,33 @@ The key principle: **attestation trust overrides author trust**. If a trusted re
 ```
 Skill package discovered
   │
+  ├── Signature invalid? ──> apply "signature_invalid" policy
+  │
+  ├── *** CHECK DESTATEMENTS FIRST ***
+  │   Any trusted reviewer destatement (verdict: "reject")?
+  │     │
+  │     ├── Yes ──> Override exists for this skill + reviewer?
+  │     │     │
+  │     │     ├── Yes ──> Skip this destatement, continue
+  │     │     └── No  ──> apply "trusted_reviewer_destatement" policy (BLOCKS)
+  │     │
+  │     └── No ──> Continue to positive trust evaluation
+  │
   ├── Has SIGNATURES/ and TRUST.json?
   │     │
-  │     ├── No ──> Has valid attestation from trusted reviewer?
+  │     ├── No ──> Has valid approval attestation from trusted reviewer?
   │     │           │
   │     │           ├── Yes (current) ──> apply "trusted_reviewer_attested" policy
   │     │           ├── Yes (stale)   ──> apply "known_author_stale_attestations" policy
   │     │           └── No            ──> apply "unsigned" policy
   │     │
-  │     └── Yes ──> Verify signature (any one valid sig in SIGNATURES/)
-  │           │
-  │           ├── Invalid ──> apply "signature_invalid" policy
-  │           │
-  │           └── Valid ──> Check attestations from trusted reviewers
+  │     └── Yes ──> Check trusted reviewer approvals
   │                 │
-  │                 ├── Trusted reviewer, current attestation ──> apply "trusted_reviewer_attested" policy
+  │                 ├── Trusted reviewer, current approval ──> apply "trusted_reviewer_attested" policy
   │                 │
-  │                 ├── Trusted reviewer, stale attestation   ──> apply "known_author_stale_attestations" policy
+  │                 ├── Trusted reviewer, stale approval   ──> apply "known_author_stale_attestations" policy
   │                 │
-  │                 └── No trusted reviewer attestation ──> Check author against trust store
+  │                 └── No trusted reviewer approval ──> Check author against trust store
   │                       │
   │                       ├── Unknown author ──> apply "unknown_author" policy
   │                       │
@@ -200,6 +259,16 @@ skillseal trust list
 
 # Change a policy
 skillseal trust set-policy <scenario> <action>
+
+# Override a specific destatement for a skill
+skillseal trust override add <skill> --despite <reviewer> [--reason "..."]
+skillseal trust override remove <skill> --despite <reviewer>
+skillseal trust override list
+
+# Subscribe to a community trust bundle
+skillseal trust bundle add <org/repo>
+skillseal trust bundle update
+skillseal trust bundle list
 ```
 
 ## Migration from v0.1.0
