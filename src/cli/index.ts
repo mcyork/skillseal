@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // SkillSeal CLI — entry point and command router
-// v0.2.6: Hardened verification, improved trust store operations
+// v0.3.0: Hardened verification, improved trust store operations
 
 import { signCommand } from "./sign";
 import { signAllCommand } from "./sign-all";
@@ -40,7 +40,7 @@ Options:
   --version Show version
 `;
 
-const VERSION = "0.2.6";
+const VERSION = "0.3.0";
 
 async function main() {
   const args = process.argv.slice(2);

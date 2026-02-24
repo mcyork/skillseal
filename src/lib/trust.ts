@@ -81,7 +81,7 @@ function getTrustStorePath(): string {
 
 function emptyStore(): TrustStore {
   return {
-    schema_version: "0.2.6",
+    schema_version: "0.3.0",
     trusted_authors: {},
     trusted_reviewers: {},
     policies: { ...DEFAULT_POLICIES },
@@ -232,7 +232,7 @@ export async function loadTrustStore(): Promise<TrustStore> {
   try {
     const data = JSON.parse(storeContent);
     const store: TrustStore = {
-      schema_version: data.schema_version || "0.2.6",
+      schema_version: data.schema_version || "0.3.0",
       trusted_authors: migrateEntities(data.trusted_authors || {}),
       trusted_reviewers: migrateEntities(data.trusted_reviewers || {}),
       policies: { ...DEFAULT_POLICIES, ...data.policies },

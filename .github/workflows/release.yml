@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-cli:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -33,7 +33,7 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Build binary
+      - name: Build CLI binary
         run: |
           bun build src/cli/index.ts \
             --compile \
@@ -46,8 +46,69 @@ jobs:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
 
+  build-hook:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: bun-darwin-arm64
+            artifact: skillseal-hook-darwin-arm64
+          - target: bun-darwin-x64
+            artifact: skillseal-hook-darwin-x64
+          - target: bun-linux-x64
+            artifact: skillseal-hook-linux-x64
+          - target: bun-linux-arm64
+            artifact: skillseal-hook-linux-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build hook binary with seal
+        run: |
+          # Generate secret
+          SECRET=$(openssl rand -hex 32)
+
+          # Inject secret into source copy
+          TEMP_SOURCE=$(mktemp)
+          sed "s/__SKILLSEAL_BUILD_SECRET_PLACEHOLDER__/${SECRET}/" hooks/skillseal-hook.ts > "${TEMP_SOURCE}"
+
+          # Compile
+          bun build "${TEMP_SOURCE}" \
+            --compile \
+            --target=${{ matrix.target }} \
+            --outfile=dist/${{ matrix.artifact }}
+          rm -f "${TEMP_SOURCE}"
+
+          # Hash and create seal
+          HASH=$(sha256sum dist/${{ matrix.artifact }} | awk '{print $1}')
+          touch "dist/${HASH}.seal"
+
+          # Write seal filename so release job can find it
+          echo "${HASH}.seal" > "dist/${{ matrix.artifact }}.sealname"
+
+      - name: Upload hook binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+
+      - name: Upload seal file
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-seal
+          path: |
+            dist/*.seal
+            dist/*.sealname
+
   release:
-    needs: build
+    needs: [build-cli, build-hook]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,6 +118,23 @@ jobs:
         with:
           path: dist/
           merge-multiple: true
+
+      - name: Organize seal files
+        run: |
+          cd dist
+          # Rename each seal to be platform-specific for clarity
+          for sealname_file in *.sealname; do
+            [ -f "$sealname_file" ] || continue
+            platform="${sealname_file%.sealname}"
+            platform="${platform#skillseal-hook-}"
+            seal_hash=$(cat "$sealname_file")
+            # Copy the generic seal to a platform-named one
+            if [ -f "$seal_hash" ]; then
+              cp "$seal_hash" "skillseal-hook-${platform}.seal"
+            fi
+          done
+          # Clean up temp files
+          rm -f *.sealname
 
       - name: Generate checksums
         run: |
@@ -70,4 +148,5 @@ jobs:
           generate_release_notes: true
           files: |
             dist/skillseal-*
+            dist/*.seal
             dist/SHA256SUMS

@@ -1,4 +1,4 @@
-// SkillSeal v0.2.6 — key cache tests
+// SkillSeal v0.3.0 — key cache tests
 
 import { test, expect, describe, afterEach } from "bun:test";
 import { readCache, writeCache } from "../src/lib/cache";

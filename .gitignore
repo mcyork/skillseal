@@ -7,3 +7,5 @@ bun.lock
 bun.lockb
 docs/working/
 *.attestation.json
+hooks/skillseal-hook
+*.seal

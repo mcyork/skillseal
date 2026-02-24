@@ -119,7 +119,7 @@ SkillSeal defends against six primary attack vectors. Each maps to a specific de
 ## What SkillSeal Does Not Prevent
 
 - **A trusted author publishing malicious code.** Signing proves identity, not intent. A trusted author who publishes a malicious update will pass verification. The current policy engine does not require attestations for trusted authors — `known_author_no_attestations` defaults to `allow`. The mitigation is to revoke trust (`skillseal trust remove`) when an author is compromised or acts maliciously. Additionally, trusted reviewers can publish destatements to flag dangerous skills for all users who trust them — providing a community-level response mechanism.
-- **Key compromise.** If an author's private key is stolen, the attacker can produce valid signatures. GPG key revocation is detected as of v0.2.6. SSH key revocation is planned.
+- **Key compromise.** If an author's private key is stolen, the attacker can produce valid signatures. GPG key revocation is detected as of v0.3.0. SSH key revocation is planned.
 - **Vulnerabilities in skill logic.** SkillSeal verifies provenance and integrity, not functional correctness. A skill that accidentally exposes an SSRF vector will pass verification if the author signed it.
 - **Zero-day exploitation of GPG itself.** SkillSeal delegates cryptographic operations to GPG. A vulnerability in GPG affects all systems that depend on it.
 
@@ -233,7 +233,7 @@ Author identity and key metadata are stored in `TRUST.json` rather than the fron
 
 ```json
 {
-  "schema_version": "0.2.6",
+  "schema_version": "0.3.0",
   "author": {
     "name": "Ian McCutcheon",
     "github": "mcyork",
@@ -282,7 +282,7 @@ The manifest format:
 
 ```json
 {
-  "schema_version": "0.2.6",
+  "schema_version": "0.3.0",
   "generated_at": "2026-02-14T00:00:00Z",
   "algorithm": "sha256",
   "files": {
@@ -454,7 +454,7 @@ The trust store is a local JSON file at `~/.skillseal/trust-store.json` that rec
 
 ```json
 {
-  "schema_version": "0.2.6",
+  "schema_version": "0.3.0",
   "trusted_authors": {
     "mcyork": {
       "keys": [
@@ -562,7 +562,7 @@ An attestation bundle is a JSON file with the extension `.attestation.json`:
 
 ```json
 {
-  "schema_version": "0.2.6",
+  "schema_version": "0.3.0",
   "format": "skillseal-attestation-bundle/v1",
   "statement": {
     "type": "https://skillseal.dev/attestation/review/v1",
@@ -916,7 +916,7 @@ Network errors do not block verification (the probe is best-effort). In offline 
 
 # Future Work
 
-**Extended key revocation.** GPG revocation detection is implemented (v0.2.6). Future work includes SSH key revocation, cross-platform revocation propagation, and a revocation timeline that detects signatures made after a key was compromised.
+**Extended key revocation.** GPG revocation detection is implemented (v0.3.0). Future work includes SSH key revocation, cross-platform revocation propagation, and a revocation timeline that detects signatures made after a key was compromised.
 
 **Automated scanning attestations.** Integration with static analysis tools that can automatically generate `automated-scan` attestation bundles. An LLM agent reviews skill instructions for suspicious patterns and signs its findings.
 
@@ -944,7 +944,7 @@ The following specifications define the formats used by SkillSeal:
 - **Trust Store Format** (`spec/trust-store-format.md`): Trust store schema, integrity protection, policy scenarios and actions, trust decision flow, and CLI management.
 - **Attestation Format** (`spec/attestation-format.md`): Attestation bundle format, canonical JSON serialization, signing and verification processes, discovery mechanisms, and staleness semantics.
 
-All specifications are versioned at `0.2.6` and included in the SkillSeal repository.
+All specifications are versioned at `0.3.0` and included in the SkillSeal repository.
 
 # Appendix B: CLI Reference
 

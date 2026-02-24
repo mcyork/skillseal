@@ -1,6 +1,6 @@
 # SkillSeal Attestation Format Specification
 
-**Version:** 0.2.6
+**Version:** 0.3.0
 **Status:** Draft
 
 ## Overview
@@ -21,7 +21,7 @@ File extension: `.attestation.json`
 
 ```json
 {
-  "schema_version": "0.2.6",
+  "schema_version": "0.3.0",
   "format": "skillseal-attestation-bundle/v1",
   "statement": {
     "type": "https://skillseal.dev/attestation/review/v1",
@@ -60,7 +60,7 @@ File extension: `.attestation.json`
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `schema_version` | Yes | `"0.2.6"` |
+| `schema_version` | Yes | `"0.3.0"` |
 | `format` | Yes | Always `"skillseal-attestation-bundle/v1"` |
 | `statement` | Yes | The signed attestation statement |
 | `signatures` | Yes | Array of `{type, value}` objects — one per signing key |
@@ -225,7 +225,7 @@ A **destatement** is a negative attestation — an attestation bundle where `sta
 
 ```json
 {
-  "schema_version": "0.2.6",
+  "schema_version": "0.3.0",
   "format": "skillseal-attestation-bundle/v1",
   "statement": {
     "type": "https://skillseal.dev/attestation/review/v1",

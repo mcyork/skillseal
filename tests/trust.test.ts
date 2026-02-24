@@ -19,7 +19,7 @@ import type { TrustJson } from "../src/lib/verify";
 
 function makeStore(overrides?: Partial<TrustStore>): TrustStore {
   return {
-    schema_version: "0.2.6",
+    schema_version: "0.3.0",
     trusted_authors: {},
     trusted_reviewers: {},
     policies: {

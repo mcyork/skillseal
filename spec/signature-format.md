@@ -1,6 +1,6 @@
 # SkillSeal Signature Format Specification
 
-**Status:** v0.2.6
+**Status:** v0.3.0
 
 ## Overview
 
@@ -141,7 +141,7 @@ manifest_hash: sha256:abcdef1234567890...
 
 ```json
 {
-  "schema_version": "0.2.6",
+  "schema_version": "0.3.0",
   "author": {
     "name": "Author Name",
     "email": "author@example.com",
@@ -167,7 +167,7 @@ manifest_hash: sha256:abcdef1234567890...
 
 ```json
 {
-  "schema_version": "0.2.6",
+  "schema_version": "0.3.0",
   "generated_at": "2026-02-14T00:00:00Z",
   "algorithm": "sha256",
   "files": {

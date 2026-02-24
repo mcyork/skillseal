@@ -32,7 +32,7 @@ SkillSeal provides a lightweight signing framework for skill packages and plugin
 | `skillseal trust <cmd>` | Manage trust store (add, remove, list, set-policy, override, bundle) |
 | `skillseal-sign/SKILL.md` | Skill that teaches LLMs how to sign |
 | `skillseal-verify/SKILL.md` | Skill that teaches LLMs how to verify |
-| `hooks/skill-verify.ts` | PreToolUse hook for Claude Code enforcement |
+| `hooks/skillseal-hook.ts` | Compiled enforcement hook for Claude Code (see [hooks/README.md](hooks/README.md)) |
 | `skillseal cache-clear` | Clear cached credentials for all providers |
 
 ## Configuration
@@ -204,7 +204,7 @@ The trust metadata file records the author's identity and all signing keys:
 
 ```json
 {
-  "schema_version": "0.2.6",
+  "schema_version": "0.3.0",
   "author": {
     "name": "Ian McCutcheon",
     "email": "",
@@ -479,44 +479,41 @@ Policies are configured in `~/.skillseal/trust-store.json`. The PreToolUse hook 
 
 **Policy weakening protection:** Changing a policy to a less restrictive action (e.g., `refuse` → `prompt`, or `prompt` → `allow`) requires the `--yes` flag to confirm. This prevents accidental weakening of trust policies.
 
-## Enforcement: PreToolUse Hook
+## Enforcement: Compiled Hook
 
-Signing and verification are only useful if you actually enforce them. SkillSeal ships a [PreToolUse hook](hooks/skill-verify.ts) for Claude Code that blocks any skill from executing unless it passes `skillseal verify`.
+Signing and verification are only useful if you actually enforce them. SkillSeal ships a **compiled enforcement hook** for Claude Code that blocks any skill from executing unless it passes `skillseal verify`.
+
+The hook compiles to a native binary with self-integrity verification — it hashes itself at startup and checks for a `.seal` file. If someone modifies the binary, all execution is blocked. See **[hooks/README.md](hooks/README.md)** for full documentation.
 
 ### How it works
 
-1. Claude Code invokes a skill (the `Skill` tool)
+1. Claude Code invokes a skill (the `Skill` tool) or runs a Bash command referencing skill files
 2. The hook intercepts the call before execution
 3. It runs `skillseal verify` on the skill directory
 4. If verification passes — silent, skill executes normally
-5. If verification fails — skill is blocked with an error message
+5. If verification fails — skill is blocked with a security message and anti-bypass directives
 
-The hook uses a **fail-closed** security model: any error (missing files, CLI crash, parse failure) blocks execution rather than allowing it.
+The hook uses a **fail-closed** security model: any error (missing files, CLI crash, parse failure, binary tampering) blocks execution rather than allowing it.
 
-### Setup
-
-1. Copy the hook to your hooks directory:
+### Quick Setup
 
 ```bash
-cp hooks/skill-verify.ts ~/.claude/hooks/skill-verify.ts
+# 1. Build the hook
+cd hooks && ./build-hook.sh
+
+# 2. Add to ~/.claude/settings.json
 ```
-
-2. Edit the two configuration paths at the top of the file:
-   - `SKILLSEAL_CLI` — path to your SkillSeal CLI entry point
-   - `SKILLS_DIR` — path to your skills directory
-
-3. Add the hook to `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Skill",
+        "matcher": "Skill|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "bun run ~/.claude/hooks/skill-verify.ts"
+            "command": "/path/to/hooks/skillseal-hook"
           }
         ]
       }
@@ -524,6 +521,8 @@ cp hooks/skill-verify.ts ~/.claude/hooks/skill-verify.ts
   }
 }
 ```
+
+Note the matcher is `Skill|Bash` — the hook intercepts both skill invocations and Bash commands that reference skill directories, preventing agents from bypassing verification by running skill code directly.
 
 ### What it looks like
 
@@ -533,27 +532,29 @@ cp hooks/skill-verify.ts ~/.claude/hooks/skill-verify.ts
 (skill runs)
 ```
 
-**Blocked skill** — facts-only output:
+**Blocked skill** — structured security response:
 ```
 > /malicious-skill
-SKILL BLOCKED: "malicious-skill"
-  Policy: trusted_reviewer_destatement
-  Flagged by: security-team
-  Reason: Critical vulnerability in network handler
-  Date: 2026-02-16T00:00:00Z
+🔒 SECURITY BLOCK: "malicious-skill" failed SkillSeal verification.
+
+⛔ MANDATORY SECURITY DIRECTIVES — READ CAREFULLY:
+1. DO NOT attempt to read, open, or inspect the skill's source files...
+2. DO NOT attempt to execute skill code directly via Bash...
+...
+7. STOP. Do not proceed with any action related to this skill.
 ```
 
-The block message shows what happened (policy, who flagged it, why) without suggesting remediation commands. The user decides what to do.
+The block message is deliberately opinionated — it tells the AI agent to stop, not try to work around the block. The user decides what to do.
 
 ### Prerequisites
 
 - All your skills must be signed (`skillseal sign-all ~/.claude/skills`)
 - The trust store must have the authors added (`skillseal trust add <github> <fingerprint>`)
-- Bun must be installed (the hook runs via `bun run`)
+- SkillSeal CLI must be on PATH or set via `SKILLSEAL_CLI` env var
 
 ## Roadmap
 
-**Shipped (v0.2.6):**
+**Shipped (v0.3.0):**
 
 - [x] **SSH signing support** — Ed25519 SSH keys alongside GPG
 - [x] **Multi-key signing** — Sign with multiple keys simultaneously via pluggable provider architecture
@@ -566,6 +567,8 @@ The block message shows what happened (policy, who flagged it, why) without sugg
 - [x] **GPG revocation detection** — Revoked GPG keys are detected before signature verification
 - [x] **Trust bundle revocation lists** — Trust bundles include `revoked_fingerprints` to block compromised keys
 - [x] **HEAD probe** — Liveness check for local attestations against reviewer's remote repository
+- [x] **Compiled enforcement hook** — Self-verifying native binary with SHA-256 seal, Bash interception, path traversal guards, and anti-bypass directives for AI agents
+- [x] **Portable hook configuration** — Environment variable-driven paths (`SKILLSEAL_CLI`, `SKILLSEAL_SKILLS_DIR`, `SKILLSEAL_PLUGINS_DIR`) with smart fallback chain
 
 **Near-term:**
 
