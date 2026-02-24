@@ -68,7 +68,7 @@ echo "  [4/5] Cleaned old seal files"
 
 # Step 5: Hash the binary and create the seal
 HASH=$(shasum -a 256 "${BUILD_DIR}/${BINARY_NAME}" | awk '{print $1}')
-touch "${BUILD_DIR}/${HASH}.seal"
+echo "${HASH}" > "${BUILD_DIR}/${HASH}.seal"
 echo "  [5/5] Created integrity seal: ${HASH}.seal"
 
 echo ""
